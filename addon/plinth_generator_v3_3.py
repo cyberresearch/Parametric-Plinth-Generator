@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Plinth Generator v3.3 (Repaired + Magnet Fix + Manifold Guarantee)",
-    "author": "ChatGPT",
+    "name": "Parametric Plinth Generator v3.3",
+    "author": "cyberresearch",
     "version": (3, 3, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Plinth v3.3",
-    "description": "Parametric plinth with slope, hollow (sealed/open), magnets (perimeter/corners), drains, magnet depth clamp, and optional manifold guarantee (voxel remesh only if needed).",
+    "description": "Parametric plinth with slope, hollow (sealed/open), magnets (perimeter/corners), drains, magnet depth clamp, and optional watertight remesh fallback.",
     "category": "Add Mesh",
 }
 
@@ -25,7 +25,7 @@ OBJ_HOLLOW = "Plinth_HollowCutter_v3_3"
 OBJ_DRAINS = "Plinth_DrainCutters_v3_3"
 OBJ_PREVIEW = f"{OBJ_MAIN}_PREVIEW"
 
-OVERSHOOT_MM = 1.0            # cutters extend past bottom by 1mm (robust booleans)
+OVERSHOOT_MM = 1.0            # cutters extend below the base for reliable boolean subtraction
 MAGNET_CLAMP_MARGIN_MM = 0.5  # keep at least this much material before cavity (sealed bottom)
 
 # Small cleanup merge distance (mm)
@@ -228,7 +228,7 @@ def make_hollow_box_cutter_mesh(
     if slope_enabled and slope_delta_mm > 0.0:
         slope_top_only(mesh, target_top, slope_delta_mm, slope_axis, high_positive)
 
-    # Critical: clamp to never breach roof
+    # Keep cutter top at or below the inner roof height.
     clamp_mesh_top_z(mesh, target_top)
 
     # Place vertically: open bottom extends below 0; sealed starts at bottom thickness
@@ -280,8 +280,8 @@ def make_hollow_cyl_cutter_mesh(
 
 
 # -----------------------------
-# Point utilities (fixes “some holes not cutting”)
-#  - ensure magnets are not duplicated / too-close / overlapping drains
+# Point utilities for stable cutter placement.
+# Deduplicate and separate points to avoid overlapping cutters.
 # -----------------------------
 def uniq_points(points, grid_mm=0.001):
     """Deduplicate points by snapping to a tiny grid."""
@@ -727,7 +727,7 @@ def build_plinth(context, props: PlinthGenProps):
         cutter_radius = cutter_dia * 0.5
         requested_depth = max(0.1, props.magnet_hole_depth_mm + props.depth_tol_mm)
 
-        # magnet depth clamp: if hollow+sealed, don't cut into cavity
+        # Clamp magnet depth for sealed hollow bottoms.
         actual_depth = requested_depth
         if props.hollow_enabled and props.sealed_bottom:
             max_safe = props.bottom_thickness_mm - MAGNET_CLAMP_MARGIN_MM
@@ -741,7 +741,7 @@ def build_plinth(context, props: PlinthGenProps):
         else:
             magnet_pts = circle_ring_points(props.diameter_mm, props.inset_mm, cutter_radius, props.magnets_count)
 
-        # de-dupe (prevents “one hole missing” when points overlap)
+        # Deduplicate coincident magnet points.
         magnet_pts = uniq_points(magnet_pts, grid_mm=0.001)
 
         if actual_depth > 0.0 and magnet_pts:
@@ -759,7 +759,7 @@ def build_plinth(context, props: PlinthGenProps):
             cutters_obj.hide_render = True
             add_boolean_modifier(main_obj, cutters_obj, "MagnetCut")
         else:
-            # No safe depth remains after clamp; skip magnets to preserve bottom margin.
+            # No safe depth remains after clamp; skip magnet cutters.
             magnet_pts = []
 
     # DRAINS (only meaningful when hollow is enabled)
@@ -780,12 +780,12 @@ def build_plinth(context, props: PlinthGenProps):
 
         drain_pts = uniq_points(drain_pts, grid_mm=0.001)
 
-        # Avoid drain/magnet overlap (prevents boolean fights -> missing holes)
+        # Keep drain points clear of magnet points.
         if props.avoid_overlap_enabled and magnet_pts:
             min_sep = (drain_radius + (props.magnet_dia_mm + props.dia_tol_mm) * 0.5) + max(0.0, props.overlap_safety_mm)
             drain_pts = filter_points_by_min_distance(drain_pts, magnet_pts, min_sep)
 
-            # If we filtered too aggressively and lost all drains, fall back to 1 drain at center-ish.
+            # If all drains are filtered out, place one at center as fallback.
             if not drain_pts:
                 drain_pts = [(0.0, 0.0)]
 

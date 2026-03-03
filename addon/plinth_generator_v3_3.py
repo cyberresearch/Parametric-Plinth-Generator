@@ -35,6 +35,7 @@ MERGE_DIST_MM = 0.001
 
 # Default voxel size used only when manifold guarantee triggers
 DEFAULT_VOXEL_MM = 0.25
+DEFAULT_DEGENERATE_FACE_AREA_MM2 = 1e-5
 
 
 # -----------------------------
@@ -661,11 +662,150 @@ def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float):
     bpy.ops.object.modifier_apply(modifier=mod.name)
 
 
-def manifold_guarantee_on_preview(preview_obj: bpy.types.Object, voxel_size_mm: float):
+def manifold_guarantee_on_preview(preview_obj: bpy.types.Object, voxel_size_mm: float) -> bool:
+    """Run cleanup and optional voxel remesh. Returns True if remesh was applied."""
+    remeshed = False
     bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
     if not mesh_is_watertight(preview_obj.data):
         apply_voxel_remesh(preview_obj, voxel_size_mm=voxel_size_mm)
+        remeshed = True
         bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
+    return remeshed
+
+
+def _mesh_signed_volume(mesh: bpy.types.Mesh) -> float:
+    """Signed volume in BU^3 (mm^3 with current unit settings)."""
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    vol = 0.0
+    for f in bm.faces:
+        if len(f.verts) < 3:
+            continue
+        v0 = f.verts[0].co
+        for i in range(1, len(f.verts) - 1):
+            v1 = f.verts[i].co
+            v2 = f.verts[i + 1].co
+            vol += v0.dot(v1.cross(v2)) / 6.0
+    bm.free()
+    return vol
+
+
+def evaluate_preview_mesh_health(
+    mesh: bpy.types.Mesh,
+    degenerate_area_mm2: float = DEFAULT_DEGENERATE_FACE_AREA_MM2,
+):
+    """Return mesh health metrics and pass/fail."""
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    face_count = len(bm.faces)
+
+    non_manifold_edges = 0
+    boundary_edges = 0
+    loose_edges = 0
+    degenerate_faces = 0
+    for e in bm.edges:
+        lf = len(e.link_faces)
+        if lf != 2:
+            non_manifold_edges += 1
+        if lf == 1:
+            boundary_edges += 1
+        elif lf == 0:
+            loose_edges += 1
+
+    loose_verts = sum(1 for v in bm.verts if len(v.link_edges) == 0)
+    for f in bm.faces:
+        if f.calc_area() <= max(1e-12, float(degenerate_area_mm2)):
+            degenerate_faces += 1
+
+    # Connected face islands.
+    bm.faces.ensure_lookup_table()
+    bm.faces.index_update()
+    components = 0
+    unseen = set(range(len(bm.faces)))
+    while unseen:
+        components += 1
+        stack = [bm.faces[unseen.pop()]]
+        while stack:
+            face = stack.pop()
+            for e in face.edges:
+                for nf in e.link_faces:
+                    nidx = nf.index
+                    if nidx in unseen:
+                        unseen.remove(nidx)
+                        stack.append(nf)
+    bm.free()
+
+    watertight = (non_manifold_edges == 0)
+    signed_volume = _mesh_signed_volume(mesh)
+    inverted_normals = watertight and (abs(signed_volume) > 1e-6) and (signed_volume < 0.0)
+
+    passed = (
+        face_count > 0
+        and watertight
+        and loose_edges == 0
+        and loose_verts == 0
+        and degenerate_faces == 0
+        and components <= 1
+        and not inverted_normals
+    )
+
+    return {
+        "passed": bool(passed),
+        "watertight": bool(watertight),
+        "non_manifold_edges": int(non_manifold_edges),
+        "boundary_edges": int(boundary_edges),
+        "loose_edges": int(loose_edges),
+        "loose_verts": int(loose_verts),
+        "degenerate_faces": int(degenerate_faces),
+        "components": int(components),
+        "inverted_normals": bool(inverted_normals),
+        "signed_volume_mm3": float(signed_volume),
+        "face_count": int(face_count),
+    }
+
+
+def reset_health_report(props: "PlinthGenProps", summary: str = "No health report available."):
+    props.health_last_ran = False
+    props.health_last_pass = False
+    props.health_last_watertight = False
+    props.health_last_non_manifold_edges = 0
+    props.health_last_boundary_edges = 0
+    props.health_last_loose_edges = 0
+    props.health_last_loose_verts = 0
+    props.health_last_degenerate_faces = 0
+    props.health_last_components = 0
+    props.health_last_inverted_normals = False
+    props.health_last_remesh_used = False
+    props.health_last_summary = summary
+
+
+def store_health_report(props: "PlinthGenProps", report, remesh_used: bool):
+    props.health_last_ran = True
+    props.health_last_pass = bool(report["passed"])
+    props.health_last_watertight = bool(report["watertight"])
+    props.health_last_non_manifold_edges = int(report["non_manifold_edges"])
+    props.health_last_boundary_edges = int(report["boundary_edges"])
+    props.health_last_loose_edges = int(report["loose_edges"])
+    props.health_last_loose_verts = int(report["loose_verts"])
+    props.health_last_degenerate_faces = int(report["degenerate_faces"])
+    props.health_last_components = int(report["components"])
+    props.health_last_inverted_normals = bool(report["inverted_normals"])
+    props.health_last_remesh_used = bool(remesh_used)
+    if report["passed"]:
+        props.health_last_summary = "PASS"
+    else:
+        issues = []
+        if not report["watertight"]:
+            issues.append("non-watertight")
+        if report["loose_verts"] > 0 or report["loose_edges"] > 0:
+            issues.append("loose geometry")
+        if report["degenerate_faces"] > 0:
+            issues.append("degenerate faces")
+        if report["components"] > 1:
+            issues.append("multiple islands")
+        if report["inverted_normals"]:
+            issues.append("inverted normals")
+        props.health_last_summary = "FAIL: " + ", ".join(issues) if issues else "FAIL"
 
 
 # -----------------------------
@@ -766,6 +906,39 @@ class PlinthGenProps(bpy.types.PropertyGroup):
         description="Used only when manifold guarantee triggers voxel remesh.",
     )
 
+    # Post-build health check (preview mesh)
+    health_check_enabled: bpy.props.BoolProperty(
+        name="Post-Build Health Check",
+        default=True,
+        description="Analyze preview mesh after booleans/manifold processing.",
+    )
+    health_block_preview_on_fail: bpy.props.BoolProperty(
+        name="Block Preview On Fail",
+        default=False,
+        description="Hide preview/export mesh when health check fails.",
+    )
+    health_degenerate_area_mm2: bpy.props.FloatProperty(
+        name="Degenerate Face Threshold (mm^2)",
+        default=DEFAULT_DEGENERATE_FACE_AREA_MM2,
+        min=1e-8,
+        max=1.0,
+        precision=6,
+    )
+
+    # Stored health report (latest build)
+    health_last_ran: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    health_last_pass: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    health_last_watertight: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    health_last_non_manifold_edges: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_boundary_edges: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_loose_edges: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_loose_verts: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_degenerate_faces: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_components: bpy.props.IntProperty(default=0, options={"HIDDEN"})
+    health_last_inverted_normals: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    health_last_remesh_used: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+    health_last_summary: bpy.props.StringProperty(default="No health report available.", options={"HIDDEN"})
+
     # Magnet/drain overlap safety (prevents “missing” holes)
     avoid_overlap_enabled: bpy.props.BoolProperty(
         name="Avoid Magnet/Drain Overlap",
@@ -782,11 +955,149 @@ class PlinthGenProps(bpy.types.PropertyGroup):
 
 
 # -----------------------------
+# Preflight validator
+# -----------------------------
+def preflight_validate(props: PlinthGenProps):
+    errors = []
+    warnings = []
+
+    if props.shape == "BOX":
+        body_h = props.height_mm
+        body_min_planar = min(props.width_mm, props.length_mm)
+    else:
+        body_h = props.cyl_height_mm
+        body_min_planar = props.diameter_mm
+
+    if props.hollow_enabled:
+        if props.shape == "BOX":
+            inner_w = props.width_mm - (2.0 * props.wall_thickness_mm)
+            inner_l = props.length_mm - (2.0 * props.wall_thickness_mm)
+            if inner_w <= 0.0 or inner_l <= 0.0:
+                errors.append("Wall thickness is too large for selected box dimensions.")
+        else:
+            inner_d = props.diameter_mm - (2.0 * props.wall_thickness_mm)
+            if inner_d <= 0.0:
+                errors.append("Wall thickness is too large for selected cylinder diameter.")
+
+        roof_z = body_h - props.top_thickness_mm
+        if roof_z <= 0.0:
+            errors.append("Top thickness must be less than total height when Hollow is enabled.")
+
+        if props.sealed_bottom:
+            if props.bottom_thickness_mm >= body_h:
+                errors.append("Bottom thickness must be less than total height.")
+            if props.bottom_thickness_mm >= roof_z:
+                errors.append("Bottom thickness must be less than (height - top thickness).")
+    elif props.sealed_bottom:
+        warnings.append("Sealed Bottom is ignored unless Hollow is enabled.")
+
+    if props.magnets_count > 0:
+        magnet_cutter_dia = max(0.1, props.magnet_dia_mm + props.dia_tol_mm)
+        magnet_r = magnet_cutter_dia * 0.5
+        requested_depth = max(0.1, props.magnet_hole_depth_mm + props.depth_tol_mm)
+
+        if props.shape == "BOX":
+            max_inset_x = (props.width_mm * 0.5) - magnet_r
+            max_inset_y = (props.length_mm * 0.5) - magnet_r
+            if max_inset_x <= 0.0 or max_inset_y <= 0.0:
+                errors.append("Magnet diameter/tolerance is too large for selected box dimensions.")
+            elif props.inset_mm > min(max_inset_x, max_inset_y):
+                warnings.append("Magnet inset exceeds available space; placement will be clamped.")
+        else:
+            max_inset = (props.diameter_mm * 0.5) - magnet_r
+            if max_inset <= 0.0:
+                errors.append("Magnet diameter/tolerance is too large for selected cylinder diameter.")
+            elif props.inset_mm > max_inset:
+                warnings.append("Magnet inset exceeds available space; placement will be clamped.")
+
+        if props.hollow_enabled and props.sealed_bottom:
+            max_safe = props.bottom_thickness_mm - MAGNET_CLAMP_MARGIN_MM
+            if max_safe <= 0.0:
+                warnings.append("Magnet holes are disabled because sealed bottom is at/below clamp margin.")
+            elif requested_depth > max_safe:
+                warnings.append(f"Magnet hole depth will clamp to {max_safe:.2f}mm due to sealed bottom.")
+
+        if props.drain_enabled and props.drain_at_magnet_centers:
+            if props.magnet_center_drain_dia_mm >= magnet_cutter_dia:
+                warnings.append("Magnet center drain diameter should be smaller than magnet hole diameter.")
+
+    if props.drain_enabled:
+        if not props.hollow_enabled:
+            warnings.append("Drain holes are ignored unless Hollow is enabled.")
+        else:
+            if props.drain_count > 0:
+                drain_r = max(0.1, props.drain_dia_mm * 0.5)
+                if props.shape == "BOX":
+                    max_inset_x = (props.width_mm * 0.5) - drain_r
+                    max_inset_y = (props.length_mm * 0.5) - drain_r
+                    if max_inset_x <= 0.0 or max_inset_y <= 0.0:
+                        errors.append("Drain diameter is too large for selected box dimensions.")
+                    elif props.drain_inset_mm > min(max_inset_x, max_inset_y):
+                        warnings.append("Drain inset exceeds available space; placement will be clamped.")
+                else:
+                    max_inset = (props.diameter_mm * 0.5) - drain_r
+                    if max_inset <= 0.0:
+                        errors.append("Drain diameter is too large for selected cylinder diameter.")
+                    elif props.drain_inset_mm > max_inset:
+                        warnings.append("Drain inset exceeds available space; placement will be clamped.")
+
+            if props.drain_at_magnet_centers:
+                if not props.sealed_bottom:
+                    warnings.append("Drain at Magnet Centers requires Sealed Bottom.")
+                if props.magnets_count <= 0:
+                    warnings.append("Drain at Magnet Centers requires at least one magnet.")
+    elif props.drain_at_magnet_centers:
+        warnings.append("Drain at Magnet Centers is ignored while Drain/Vent Holes is disabled.")
+
+    if props.base_trim_enabled:
+        if props.shape == "BOX":
+            max_trim = min(props.width_mm, props.length_mm) * 0.5
+            if props.base_trim_radius_mm >= max_trim:
+                warnings.append("Base trim radius is very large relative to box footprint.")
+        else:
+            max_minor = (props.diameter_mm * 0.5) - 0.1
+            if max_minor <= 0.0:
+                errors.append("Cylinder diameter is too small for base trim.")
+            elif props.base_trim_radius_mm > max_minor:
+                warnings.append(f"Cylinder trim radius will clamp to {max_minor:.2f}mm.")
+
+    if props.manifold_guarantee and props.voxel_size_mm > max(0.2, body_min_planar * 0.2):
+        warnings.append("Voxel size is coarse for current dimensions and may remove detail.")
+
+    if props.health_check_enabled and not props.preview_cuts_duplicate:
+        warnings.append("Post-build health check requires Preview Cuts (Duplicate).")
+    if props.health_block_preview_on_fail and not props.health_check_enabled:
+        warnings.append("Block Preview On Fail is ignored when Post-Build Health Check is disabled.")
+
+    # Deduplicate while preserving order.
+    dedup_errors = list(dict.fromkeys(errors))
+    dedup_warnings = list(dict.fromkeys(warnings))
+    return dedup_errors, dedup_warnings
+
+
+def preflight_report_to_operator(op: bpy.types.Operator, errors, warnings):
+    if errors:
+        op.report({'ERROR'}, f"Preflight failed ({len(errors)} issue(s)).")
+        for msg in errors[:5]:
+            op.report({'ERROR'}, msg)
+        if len(errors) > 5:
+            op.report({'ERROR'}, f"... and {len(errors) - 5} more.")
+        return False
+    if warnings:
+        op.report({'WARNING'}, f"Preflight warning(s): {len(warnings)}. See panel for details.")
+    return True
+
+
+# -----------------------------
 # Build core
 # -----------------------------
 def build_plinth(context, props: PlinthGenProps):
+    """Build geometry. Returns (preview_blocked, block_message)."""
     ensure_units_mm()
     clear_plinthgen_artifacts()
+    reset_health_report(props, summary="Health check has not run yet.")
+    preview_blocked = False
+    preview_block_message = ""
 
     coll = get_or_create_collection(COLL_NAME)
 
@@ -992,21 +1303,44 @@ def build_plinth(context, props: PlinthGenProps):
         apply_all_modifiers(preview)
         ground_mesh_to_z0(preview.data)
 
+        remesh_used = False
         if props.manifold_guarantee:
-            manifold_guarantee_on_preview(preview, voxel_size_mm=props.voxel_size_mm)
+            remesh_used = manifold_guarantee_on_preview(preview, voxel_size_mm=props.voxel_size_mm)
             ground_mesh_to_z0(preview.data)
 
-        # hide driver
-        main_obj.hide_set(True)
-        main_obj.hide_render = True
+        if props.health_check_enabled:
+            health = evaluate_preview_mesh_health(
+                preview.data,
+                degenerate_area_mm2=props.health_degenerate_area_mm2,
+            )
+            store_health_report(props, health, remesh_used=remesh_used)
 
-        bpy.context.view_layer.objects.active = preview
-        preview.select_set(True)
+            if props.health_block_preview_on_fail and not health["passed"]:
+                preview.hide_set(True)
+                preview.hide_render = True
+                main_obj.hide_set(False)
+                main_obj.hide_render = False
+                preview.select_set(False)
+                bpy.context.view_layer.objects.active = main_obj
+                main_obj.select_set(True)
+                preview_blocked = True
+                preview_block_message = f"Preview blocked by health check: {props.health_last_summary}"
+        else:
+            reset_health_report(props, summary="Health check disabled.")
+
+        # hide driver
+        if not preview_blocked:
+            main_obj.hide_set(True)
+            main_obj.hide_render = True
+            bpy.context.view_layer.objects.active = preview
+            preview.select_set(True)
     else:
+        reset_health_report(props, summary="Health check requires Preview Cuts (Duplicate).")
         bpy.context.view_layer.objects.active = main_obj
         main_obj.select_set(True)
 
     purge_orphans()
+    return preview_blocked, preview_block_message
 
 
 # -----------------------------
@@ -1018,10 +1352,15 @@ class PLINTHGEN_OT_create(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        props = getattr(context.scene, PROP_NAME)
+        errors, warnings = preflight_validate(props)
+        if not preflight_report_to_operator(self, errors, warnings):
+            return {"CANCELLED"}
         delete_mesh_objects_only()
         ensure_units_mm()
-        props = getattr(context.scene, PROP_NAME)
-        build_plinth(context, props)
+        preview_blocked, block_message = build_plinth(context, props)
+        if preview_blocked:
+            self.report({'ERROR'}, block_message)
         return {"FINISHED"}
 
 
@@ -1031,10 +1370,15 @@ class PLINTHGEN_OT_rebuild(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
+        props = getattr(context.scene, PROP_NAME)
+        errors, warnings = preflight_validate(props)
+        if not preflight_report_to_operator(self, errors, warnings):
+            return {"CANCELLED"}
         delete_mesh_objects_only()
         ensure_units_mm()
-        props = getattr(context.scene, PROP_NAME)
-        build_plinth(context, props)
+        preview_blocked, block_message = build_plinth(context, props)
+        if preview_blocked:
+            self.report({'ERROR'}, block_message)
         return {"FINISHED"}
 
 
@@ -1051,6 +1395,7 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         p = getattr(context.scene, PROP_NAME)
+        errors, warnings = preflight_validate(p)
 
         row = layout.row(align=True)
         row.operator("plinthgen.create_v3_3", text="Create", icon="MESH_CUBE")
@@ -1058,6 +1403,20 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
 
         layout.separator()
         layout.prop(p, "shape")
+
+        pf = layout.box()
+        pf.label(text="Preflight")
+        if not errors and not warnings:
+            pf.label(text="No issues detected.", icon="CHECKMARK")
+        else:
+            for msg in errors[:5]:
+                pf.label(text=msg, icon="ERROR")
+            if len(errors) > 5:
+                pf.label(text=f"... and {len(errors) - 5} more error(s).", icon="ERROR")
+            for msg in warnings[:5]:
+                pf.label(text=msg, icon="INFO")
+            if len(warnings) > 5:
+                pf.label(text=f"... and {len(warnings) - 5} more warning(s).", icon="INFO")
 
         dims = layout.box()
         dims.label(text="Dimensions")
@@ -1135,6 +1494,31 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
         col.enabled = p.manifold_guarantee
         col.prop(p, "voxel_size_mm")
         mf.label(text="Voxel remesh runs ONLY if preview isn't watertight.")
+
+        hc = layout.box()
+        hc.label(text="Post-Build Health Check")
+        hc.prop(p, "health_check_enabled")
+        col = hc.column()
+        col.enabled = p.health_check_enabled
+        col.prop(p, "health_block_preview_on_fail")
+        col.prop(p, "health_degenerate_area_mm2")
+
+        if p.health_last_ran:
+            if p.health_last_pass:
+                hc.label(text="Status: PASS", icon="CHECKMARK")
+            else:
+                hc.label(text=f"Status: {p.health_last_summary}", icon="ERROR")
+            hc.label(text=f"Watertight: {'Yes' if p.health_last_watertight else 'No'}")
+            hc.label(text=f"Non-manifold edges: {p.health_last_non_manifold_edges}")
+            hc.label(text=f"Loose edges/verts: {p.health_last_loose_edges}/{p.health_last_loose_verts}")
+            hc.label(text=f"Degenerate faces: {p.health_last_degenerate_faces}")
+            hc.label(text=f"Face islands: {p.health_last_components}")
+            if p.health_last_inverted_normals:
+                hc.label(text="Inverted normals detected.", icon="ERROR")
+            if p.health_last_remesh_used:
+                hc.label(text="Voxel remesh was applied by manifold guarantee.", icon="INFO")
+        else:
+            hc.label(text=p.health_last_summary, icon="INFO")
 
         vd = layout.box()
         vd.label(text="Visual / Debug")

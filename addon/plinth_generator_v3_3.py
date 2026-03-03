@@ -4,14 +4,14 @@ bl_info = {
     "version": (3, 3, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Plinth v3.3",
-    "description": "Parametric plinth with slope, hollow (sealed/open), magnets (perimeter/corners), drains, magnet depth clamp, and optional watertight remesh fallback.",
+    "description": "Parametric plinth with slope, hollow (sealed/open), decorative half-round base trim, magnets, drains, and optional watertight remesh fallback.",
     "category": "Add Mesh",
 }
 
 import bpy
 import bmesh
 import math
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 # -----------------------------
 # Global names / constants
@@ -23,6 +23,8 @@ OBJ_MAIN = "Plinth_Main_v3_3"
 OBJ_CUTTERS = "Plinth_MagnetCutters_v3_3"
 OBJ_HOLLOW = "Plinth_HollowCutter_v3_3"
 OBJ_DRAINS = "Plinth_DrainCutters_v3_3"
+OBJ_DRAINS_MAGNET_CENTER = "Plinth_MagnetCenterDrainCutters_v3_3"
+OBJ_BASE_TRIM = "Plinth_BaseTrim_v3_3"
 OBJ_PREVIEW = f"{OBJ_MAIN}_PREVIEW"
 
 OVERSHOOT_MM = 1.0            # cutters extend below the base for reliable boolean subtraction
@@ -70,7 +72,7 @@ def delete_mesh_objects_only():
 
 def clear_plinthgen_artifacts():
     """Remove our known objects and our collection (Blender 5 safe)."""
-    for name in (OBJ_MAIN, OBJ_CUTTERS, OBJ_HOLLOW, OBJ_DRAINS, OBJ_PREVIEW):
+    for name in (OBJ_MAIN, OBJ_CUTTERS, OBJ_HOLLOW, OBJ_DRAINS, OBJ_DRAINS_MAGNET_CENTER, OBJ_BASE_TRIM, OBJ_PREVIEW):
         obj = bpy.data.objects.get(name)
         if obj:
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -195,6 +197,107 @@ def make_cylinder_mesh(diameter_mm: float, height_mm: float, segments: int, mesh
     # create_cone centers on origin; shift so bottom at z=0
     for v in bm.verts:
         v.co.z += height_mm * 0.5
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+    return mesh
+
+
+def make_box_base_half_round_mesh(
+    width_mm: float,
+    length_mm: float,
+    radius_mm: float,
+    segments: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    """Build half-round trim from four horizontal cylinders on the side walls."""
+    mesh = bpy.data.meshes.new(mesh_name)
+    bm = bmesh.new()
+
+    r = max(0.1, float(radius_mm))
+    seg = max(12, int(segments))
+
+    def add_rod(depth_mm: float, center_xyz, axis: str):
+        res = bmesh.ops.create_cone(
+            bm,
+            cap_ends=True,
+            cap_tris=False,
+            segments=seg,
+            radius1=r,
+            radius2=r,
+            depth=max(0.1, float(depth_mm)),
+        )
+        rod_verts = list(res["verts"])
+        if axis == "X":
+            rot = Matrix.Rotation(math.pi * 0.5, 3, "Y")
+        else:
+            rot = Matrix.Rotation(-math.pi * 0.5, 3, "X")
+        bmesh.ops.rotate(bm, verts=rod_verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
+        bmesh.ops.translate(bm, verts=rod_verts, vec=Vector(center_xyz))
+
+    half_w = width_mm * 0.5
+    half_l = length_mm * 0.5
+    zc = r
+
+    add_rod(width_mm, (0.0, half_l, zc), axis="X")
+    add_rod(width_mm, (0.0, -half_l, zc), axis="X")
+    add_rod(length_mm, (half_w, 0.0, zc), axis="Y")
+    add_rod(length_mm, (-half_w, 0.0, zc), axis="Y")
+
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+    return mesh
+
+
+def make_cyl_base_half_round_mesh(
+    major_radius_mm: float,
+    minor_radius_mm: float,
+    major_segments: int,
+    minor_segments: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    """Build a torus ring for cylinder base trim."""
+    mesh = bpy.data.meshes.new(mesh_name)
+    bm = bmesh.new()
+
+    major_r = max(0.1, float(major_radius_mm))
+    minor_r = max(0.1, min(float(minor_radius_mm), max(0.1, major_r - 0.1)))
+    seg_major = max(24, int(major_segments))
+    seg_minor = max(12, int(minor_segments))
+
+    rings = []
+    for i in range(seg_major):
+        a = (2.0 * math.pi * i) / seg_major
+        ca = math.cos(a)
+        sa = math.sin(a)
+        ring = []
+        for j in range(seg_minor):
+            b = (2.0 * math.pi * j) / seg_minor
+            cb = math.cos(b)
+            sb = math.sin(b)
+            rr = major_r + (minor_r * cb)
+            x = rr * ca
+            y = rr * sa
+            z = minor_r + (minor_r * sb)
+            ring.append(bm.verts.new((x, y, z)))
+        rings.append(ring)
+
+    for i in range(seg_major):
+        i2 = (i + 1) % seg_major
+        for j in range(seg_minor):
+            j2 = (j + 1) % seg_minor
+            v1 = rings[i][j]
+            v2 = rings[i2][j]
+            v3 = rings[i2][j2]
+            v4 = rings[i][j2]
+            try:
+                bm.faces.new((v1, v2, v3, v4))
+            except ValueError:
+                pass
 
     bm.normal_update()
     bm.to_mesh(mesh)
@@ -436,6 +539,14 @@ def add_boolean_modifier(target_obj: bpy.types.Object, cutter_obj: bpy.types.Obj
     return mod
 
 
+def add_boolean_union_modifier(target_obj: bpy.types.Object, union_obj: bpy.types.Object, name: str):
+    mod = target_obj.modifiers.new(name=name, type="BOOLEAN")
+    mod.operation = "UNION"
+    mod.solver = "EXACT"
+    mod.object = union_obj
+    return mod
+
+
 def apply_all_modifiers(obj: bpy.types.Object):
     view_layer = bpy.context.view_layer
     try:
@@ -598,6 +709,11 @@ class PlinthGenProps(bpy.types.PropertyGroup):
     top_thickness_mm: bpy.props.FloatProperty(name="Top Thickness (mm)", default=12.0, min=0.5)
     bottom_thickness_mm: bpy.props.FloatProperty(name="Bottom Thickness (mm)", default=3.0, min=0.5)
 
+    # Base trim
+    base_trim_enabled: bpy.props.BoolProperty(name="Decorative Half-Round Base", default=False)
+    base_trim_radius_mm: bpy.props.FloatProperty(name="Half-Round Radius (mm)", default=2.5, min=0.1, max=50.0)
+    base_trim_segments: bpy.props.IntProperty(name="Trim Segments", default=32, min=12, max=128)
+
     # Magnets
     magnets_count: bpy.props.IntProperty(name="# Magnets", default=4, min=0, max=64)
     magnet_layout_box: bpy.props.EnumProperty(
@@ -616,6 +732,17 @@ class PlinthGenProps(bpy.types.PropertyGroup):
     drain_count: bpy.props.IntProperty(name="# Drain Holes", default=2, min=0, max=12)
     drain_dia_mm: bpy.props.FloatProperty(name="Drain Dia (mm)", default=4.0, min=0.5)
     drain_inset_mm: bpy.props.FloatProperty(name="Drain Inset (mm)", default=8.0, min=0.0)
+    drain_at_magnet_centers: bpy.props.BoolProperty(
+        name="Drain at Magnet Centers",
+        default=False,
+        description="Add drain holes centered inside magnet pockets (sealed hollow bottoms only).",
+    )
+    magnet_center_drain_dia_mm: bpy.props.FloatProperty(
+        name="Magnet Center Drain Dia (mm)",
+        default=1.5,
+        min=0.2,
+        max=10.0,
+    )
 
     # Visual/debug
     show_cutters: bpy.props.BoolProperty(name="Show Cutters", default=False)
@@ -803,6 +930,58 @@ def build_plinth(context, props: PlinthGenProps):
         drains_obj.hide_render = True
         add_boolean_modifier(main_obj, drains_obj, "DrainCut")
 
+    # DRAINS AT MAGNET CENTERS (sealed hollow bottoms)
+    if (
+        props.drain_enabled
+        and props.hollow_enabled
+        and props.sealed_bottom
+        and props.drain_at_magnet_centers
+        and magnet_pts
+    ):
+        center_pts = uniq_points(magnet_pts, grid_mm=0.001)
+        center_radius = max(0.1, props.magnet_center_drain_dia_mm * 0.5)
+        center_depth = max(3.0, props.bottom_thickness_mm + 2.0)
+
+        center_mesh = build_vertical_cylinder_cutters_mesh(
+            radius_mm=center_radius,
+            depth_mm=center_depth,
+            positions_xy=center_pts,
+            mesh_name="Plinth_MagnetCenterDrainCuttersMesh_v3_3",
+            segments=48,
+            overshoot_mm=0.0,
+        )
+        center_obj = bpy.data.objects.new(OBJ_DRAINS_MAGNET_CENTER, center_mesh)
+        coll.objects.link(center_obj)
+        center_obj.hide_set(not props.show_cutters)
+        center_obj.hide_render = True
+        add_boolean_modifier(main_obj, center_obj, "DrainAtMagnetCenters")
+
+    # BASE TRIM (decorative half-round at base)
+    if props.base_trim_enabled and props.base_trim_radius_mm > 0.0:
+        trim_radius = max(0.1, float(props.base_trim_radius_mm))
+        if props.shape == "BOX":
+            trim_mesh = make_box_base_half_round_mesh(
+                width_mm=props.width_mm,
+                length_mm=props.length_mm,
+                radius_mm=trim_radius,
+                segments=props.base_trim_segments,
+                mesh_name="Plinth_BaseTrimBoxMesh_v3_3",
+            )
+        else:
+            trim_mesh = make_cyl_base_half_round_mesh(
+                major_radius_mm=props.diameter_mm * 0.5,
+                minor_radius_mm=trim_radius,
+                major_segments=max(24, int(props.cyl_segments)),
+                minor_segments=props.base_trim_segments,
+                mesh_name="Plinth_BaseTrimCylMesh_v3_3",
+            )
+
+        trim_obj = bpy.data.objects.new(OBJ_BASE_TRIM, trim_mesh)
+        coll.objects.link(trim_obj)
+        trim_obj.hide_set(not props.show_cutters)
+        trim_obj.hide_render = True
+        add_boolean_union_modifier(main_obj, trim_obj, "BaseTrimUnion")
+
     # PREVIEW (export this)
     if props.preview_cuts_duplicate:
         preview = main_obj.copy()
@@ -913,6 +1092,14 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
         col2.prop(p, "bottom_thickness_mm")
         ho.label(text=f"Magnet clamp margin: {MAGNET_CLAMP_MARGIN_MM}mm (sealed bottom)")
 
+        bt = layout.box()
+        bt.label(text="Base Trim")
+        bt.prop(p, "base_trim_enabled")
+        col = bt.column()
+        col.enabled = p.base_trim_enabled
+        col.prop(p, "base_trim_radius_mm")
+        col.prop(p, "base_trim_segments")
+
         mg = layout.box()
         mg.label(text="Magnets")
         mg.prop(p, "magnets_count")
@@ -932,10 +1119,14 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
         col.prop(p, "drain_count")
         col.prop(p, "drain_dia_mm")
         col.prop(p, "drain_inset_mm")
-        col.prop(p, "avoid_overlap_enabled")
+        col.prop(p, "drain_at_magnet_centers")
         col2 = col.column()
-        col2.enabled = p.avoid_overlap_enabled
-        col2.prop(p, "overlap_safety_mm")
+        col2.enabled = p.drain_at_magnet_centers and p.sealed_bottom and p.magnets_count > 0
+        col2.prop(p, "magnet_center_drain_dia_mm")
+        col.prop(p, "avoid_overlap_enabled")
+        col3 = col.column()
+        col3.enabled = p.avoid_overlap_enabled
+        col3.prop(p, "overlap_safety_mm")
 
         mf = layout.box()
         mf.label(text="Manifold Guarantee (Preview)")

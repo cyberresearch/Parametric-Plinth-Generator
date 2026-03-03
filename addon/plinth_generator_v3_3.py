@@ -37,6 +37,7 @@ MERGE_DIST_MM = 0.001
 DEFAULT_VOXEL_MM = 0.25
 DEFAULT_DEGENERATE_FACE_AREA_MM2 = 1e-5
 MM_PER_INCH = 25.4
+MAX_PERIMETER_DETAIL_INSTANCES = 4096
 
 
 # -----------------------------
@@ -335,8 +336,28 @@ def translate_mesh(mesh: bpy.types.Mesh, vec: Vector):
     mesh.update()
 
 
+def clamp_instance_count(count: int, minimum: int = 0, maximum: int = MAX_PERIMETER_DETAIL_INSTANCES) -> int:
+    return max(int(minimum), min(int(count), int(maximum)))
+
+
+def estimate_perimeter_instance_count(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    spacing_mm: float,
+    minimum: int,
+) -> int:
+    spacing = max(1e-6, float(spacing_mm))
+    if shape == "BOX":
+        perimeter = 2.0 * (max(0.0, float(width_mm)) + max(0.0, float(length_mm)))
+    else:
+        perimeter = math.pi * max(0.0, float(diameter_mm))
+    return max(int(minimum), int(perimeter / spacing))
+
+
 def rect_perimeter_points_from_extents(hx: float, hy: float, count: int):
-    count = max(0, int(count))
+    count = clamp_instance_count(count, minimum=0)
     if count <= 0:
         return []
     hx = max(0.001, float(hx))
@@ -538,13 +559,13 @@ def make_bead_border_mesh(
         z = (height_mm - r - (row * bead_size_mm * 0.9)) if at_top else (r + (row * bead_size_mm * 0.9))
         if shape == "BOX":
             per = 2.0 * (width_mm + length_mm)
-            n = max(4, int(per / spacing))
+            n = clamp_instance_count(max(4, int(per / spacing)), minimum=4)
             pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (r * 0.4), (length_mm * 0.5) + (r * 0.4), n)
             for (x, y) in pts:
                 bm_add_sphere(bm, r, (x, y, z), u_segments=16, v_segments=8)
         else:
             per = math.pi * diameter_mm
-            n = max(6, int(per / spacing))
+            n = clamp_instance_count(max(6, int(per / spacing)), minimum=6)
             rr = (diameter_mm * 0.5) + (r * 0.4)
             for i in range(n):
                 a = (2.0 * math.pi * i) / n
@@ -569,7 +590,7 @@ def make_rope_band_mesh(
     zc = (height_mm - r) if at_top else r
     if shape == "BOX":
         per = 2.0 * (width_mm + length_mm)
-        n = max(8, int(per / pitch))
+        n = clamp_instance_count(max(8, int(per / pitch)), minimum=8)
         pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (r * 0.5), (length_mm * 0.5) + (r * 0.5), n)
         for i, (x, y) in enumerate(pts):
             dz = math.sin((2.0 * math.pi * i * 2.0) / n) * (r * 0.35)
@@ -577,7 +598,7 @@ def make_rope_band_mesh(
             bm_add_sphere(bm, r * 0.75, (x, y, zc - dz), u_segments=12, v_segments=8)
     else:
         per = math.pi * diameter_mm
-        n = max(10, int(per / pitch))
+        n = clamp_instance_count(max(10, int(per / pitch)), minimum=10)
         rr = (diameter_mm * 0.5) + (r * 0.5)
         for i in range(n):
             a = (2.0 * math.pi * i) / n
@@ -610,13 +631,13 @@ def make_dentil_course_mesh(
     zc = (height_mm - (h * 0.5)) if at_top else (h * 0.5)
     if shape == "BOX":
         per = 2.0 * (width_mm + length_mm)
-        n = max(4, int(per / max(spacing, w)))
+        n = clamp_instance_count(max(4, int(per / max(spacing, w))), minimum=4)
         pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (d * 0.5), (length_mm * 0.5) + (d * 0.5), n)
         for (x, y) in pts:
             bm_add_box(bm, w, w, h, (x, y, zc))
     else:
         per = math.pi * diameter_mm
-        n = max(6, int(per / max(spacing, w)))
+        n = clamp_instance_count(max(6, int(per / max(spacing, w))), minimum=6)
         rr = (diameter_mm * 0.5) + (d * 0.5)
         for i in range(n):
             a = (2.0 * math.pi * i) / n
@@ -1841,6 +1862,58 @@ def preflight_validate(props: PlinthGenProps):
         else:
             if props.feet_inset_mm >= (props.diameter_mm * 0.5):
                 warnings.append("Feet inset is large and may collapse feet positions.")
+
+    # Security/safety: bound perimeter-driven decorative instance counts.
+    if props.beads_enabled:
+        bead_min = 4 if props.shape == "BOX" else 6
+        bead_n = estimate_perimeter_instance_count(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            spacing_mm=props.bead_spacing_mm,
+            minimum=bead_min,
+        )
+        bead_total = bead_n * max(1, int(props.bead_rows))
+        if bead_total > MAX_PERIMETER_DETAIL_INSTANCES:
+            errors.append(
+                f"Bead Border would create {bead_total} beads (limit {MAX_PERIMETER_DETAIL_INSTANCES}). "
+                "Increase bead spacing or reduce plinth dimensions."
+            )
+
+    if props.rope_enabled:
+        rope_min = 8 if props.shape == "BOX" else 10
+        rope_n = estimate_perimeter_instance_count(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            spacing_mm=props.rope_pitch_mm,
+            minimum=rope_min,
+        )
+        rope_total = rope_n * 2
+        if rope_total > MAX_PERIMETER_DETAIL_INSTANCES:
+            errors.append(
+                f"Rope Twist Band would create {rope_total} strand elements (limit {MAX_PERIMETER_DETAIL_INSTANCES}). "
+                "Increase rope pitch or reduce plinth dimensions."
+            )
+
+    if props.dentil_enabled:
+        dentil_min = 4 if props.shape == "BOX" else 6
+        dentil_spacing = max(props.dentil_spacing_mm, props.dentil_width_mm)
+        dentil_n = estimate_perimeter_instance_count(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            spacing_mm=dentil_spacing,
+            minimum=dentil_min,
+        )
+        if dentil_n > MAX_PERIMETER_DETAIL_INSTANCES:
+            errors.append(
+                f"Dentil Course would create {dentil_n} dentils (limit {MAX_PERIMETER_DETAIL_INSTANCES}). "
+                "Increase dentil spacing/width or reduce plinth dimensions."
+            )
 
     # Deduplicate while preserving order.
     dedup_errors = list(dict.fromkeys(errors))

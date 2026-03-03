@@ -8,14 +8,22 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 
 ## Feature Highlights
 - `BOX` and `CYL` plinth generation
+- Dimension input units: `MM` or `IN` (inch entry always converts to mm for model generation)
 - Top-only slope controls
 - Hollow interior (open or sealed bottom)
 - Magnet pockets (box perimeter/corners, cylinder ring)
 - Standard drain/vent holes plus optional drains at magnet centers (sealed hollow mode)
 - Decorative half-round base trim
+- Expanded decorative profile suite (bands, steps, fluting, panels, beads, rope, dentils, scallops, bosses, nameplate recess, texture stamp, feet)
 - Optional manifold guarantee on preview (voxel remesh only when needed)
 - Preflight validator before build/rebuild
 - Post-build health check with optional preview block on fail
+
+## Units Behavior
+- Set `Dimensions > Input Units` to `Millimeters` or `Inches`.
+- In inch mode, dimension fields accept inches and display live converted mm values directly below each field.
+- Core geometry is always generated from mm properties internally (`1 in = 25.4 mm`).
+- Non-dimension controls (for example wall thickness, drain diameter, trim radius) remain mm-based.
 
 ## New Install (First Time)
 1. Open Blender.
@@ -34,7 +42,7 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 7. Reopen your `.blend` file and run `Force Rebuild` once to refresh generated geometry.
 
 ## Recommended Robust Workflow
-1. Set dimensions and feature options (`Hollow`, `Magnets`, `Drain / Vent Holes`, `Base Trim`).
+1. Set `Input Units` first, then enter dimensions and feature options (`Hollow`, `Magnets`, `Drain / Vent Holes`, `Base Trim`, decorations).
 2. Review the `Preflight` box and resolve any errors before building.
 3. Keep `Preview Cuts (Duplicate)` enabled for export-ready mesh output.
 4. Keep `Manifold Guarantee (Preview)` enabled for automatic watertight remediation.

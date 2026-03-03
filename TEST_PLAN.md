@@ -39,6 +39,11 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 | T19 | Health requires preview duplicate | `preview_cuts_duplicate=OFF`, `health_check_enabled=ON`, build | Preflight warning: `Post-build health check requires Preview Cuts (Duplicate).` Health section shows `Health check requires Preview Cuts (Duplicate).` |  |  |
 | T20 | Forced health fail + block preview | `shape=BOX`, `width=1`, `length=1`, `height=1`, `health_check_enabled=ON`, `health_block_preview_on_fail=ON`, `health_degenerate_area_mm2=1.0`, preview duplicate ON, build | Health fails (degenerate faces). Preview is hidden, main is visible, operator reports `Preview blocked by health check: ...`. |  |  |
 | T21 | Manifold + health integration | `hollow=ON`, `sealed=OFF`, `manifold_guarantee=ON`, health ON, preview duplicate ON, build | Health report runs on final preview mesh and may display `Voxel remesh was applied by manifold guarantee.` when remesh is triggered. |  |  |
+| T22 | Unit input toggle (BOX) | `shape=BOX`, set `width_mm=76.2`, `length_mm=88.9`, `height_mm=57.15`, then switch `Input Units=IN` | Inch fields show `3.0`, `3.5`, `2.25` (or rounded equivalents). |  |  |
+| T23 | Inch input drives mm (BOX) | `shape=BOX`, `Input Units=IN`, set `width_in=4.0`, `length_in=6.0`, `height_in=2.0` | Live labels show `101.600 mm`, `152.400 mm`, `50.800 mm`; build uses those mm dimensions. |  |  |
+| T24 | Inch input drives mm (CYL) | `shape=CYL`, `Input Units=IN`, set `diameter_in=5.0`, `cyl_height_in=2.5` | Live labels show `127.000 mm` and `63.500 mm`; built plinth matches those values. |  |  |
+| T25 | mm input back-sync to inches | `Input Units=MM`, set `width_mm=50.8`, `length_mm=76.2`, switch `Input Units=IN` | Inch fields display `2.0` and `3.0` (or rounded equivalents). |  |  |
+| T26 | Unit mode does not break manifold/health path | `Input Units=IN`, enter valid inch dimensions, enable `preview duplicate`, `manifold_guarantee`, `health_check`, build | Build succeeds; manifold/health behavior is unchanged, and health report populates normally. |  |  |
 
 ## Signoff
 

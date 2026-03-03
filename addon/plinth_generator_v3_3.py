@@ -36,6 +36,7 @@ MERGE_DIST_MM = 0.001
 # Default voxel size used only when manifold guarantee triggers
 DEFAULT_VOXEL_MM = 0.25
 DEFAULT_DEGENERATE_FACE_AREA_MM2 = 1e-5
+MM_PER_INCH = 25.4
 
 
 # -----------------------------
@@ -213,45 +214,66 @@ def make_box_base_half_round_mesh(
     segments: int,
     mesh_name: str,
 ) -> bpy.types.Mesh:
-    """Build half-round trim from four horizontal cylinders on the side walls."""
-    mesh = bpy.data.meshes.new(mesh_name)
+    """Build a continuous half-round perimeter band with mitered box corners."""
     bm = bmesh.new()
-
     r = max(0.1, float(radius_mm))
-    seg = max(12, int(segments))
+    seg = max(8, int(segments))
 
-    def add_rod(depth_mm: float, center_xyz, axis: str):
-        res = bmesh.ops.create_cone(
-            bm,
-            cap_ends=True,
-            cap_tris=False,
-            segments=seg,
-            radius1=r,
-            radius2=r,
-            depth=max(0.1, float(depth_mm)),
-        )
-        rod_verts = list(res["verts"])
-        if axis == "X":
-            rot = Matrix.Rotation(math.pi * 0.5, 3, "Y")
-        else:
-            rot = Matrix.Rotation(-math.pi * 0.5, 3, "X")
-        bmesh.ops.rotate(bm, verts=rod_verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
-        bmesh.ops.translate(bm, verts=rod_verts, vec=Vector(center_xyz))
+    corners_xy = [
+        Vector((-width_mm * 0.5, -length_mm * 0.5, 0.0)),
+        Vector((width_mm * 0.5, -length_mm * 0.5, 0.0)),
+        Vector((width_mm * 0.5, length_mm * 0.5, 0.0)),
+        Vector((-width_mm * 0.5, length_mm * 0.5, 0.0)),
+    ]  # CCW
 
-    half_w = width_mm * 0.5
-    half_l = length_mm * 0.5
-    zc = r
+    def offset_corners(offset_d: float):
+        pts = []
+        for i, curr in enumerate(corners_xy):
+            prev = corners_xy[(i - 1) % len(corners_xy)]
+            nxt = corners_xy[(i + 1) % len(corners_xy)]
+            t_prev = (curr - prev).normalized()
+            t_next = (nxt - curr).normalized()
+            n_prev = Vector((t_prev.y, -t_prev.x, 0.0))
+            n_next = Vector((t_next.y, -t_next.x, 0.0))
+            m = n_prev + n_next
+            if m.length <= 1e-9:
+                m = n_next.copy()
+            m.normalize()
+            denom = max(1e-6, m.dot(n_prev))
+            p = curr + (m * (offset_d / denom))
+            pts.append((p.x, p.y))
+        return pts
 
-    add_rod(width_mm, (0.0, half_l, zc), axis="X")
-    add_rod(width_mm, (0.0, -half_l, zc), axis="X")
-    add_rod(length_mm, (half_w, 0.0, zc), axis="Y")
-    add_rod(length_mm, (-half_w, 0.0, zc), axis="Y")
+    loops = []
+    # Half-circle profile in (offset, z): z from 0..2r and offset from 0..r.
+    for k in range(seg + 1):
+        a = (-math.pi * 0.5) + (math.pi * k / seg)
+        d = r * math.cos(a)
+        z = r + (r * math.sin(a))
+        loop_xy = offset_corners(d)
+        loop = [bm.verts.new((x, y, z)) for (x, y) in loop_xy]
+        loops.append(loop)
 
-    bm.normal_update()
-    bm.to_mesh(mesh)
-    bm.free()
-    mesh.update()
-    return mesh
+    def bridge_loops(loop_a, loop_b):
+        n = len(loop_a)
+        for i in range(n):
+            i2 = (i + 1) % n
+            v1 = loop_a[i]
+            v2 = loop_a[i2]
+            v3 = loop_b[i2]
+            v4 = loop_b[i]
+            try:
+                bm.faces.new((v1, v2, v3, v4))
+            except ValueError:
+                pass
+
+    # Outer curved surface.
+    for k in range(seg):
+        bridge_loops(loops[k], loops[k + 1])
+    # Close profile against wall plane (straight segment between arc endpoints).
+    bridge_loops(loops[-1], loops[0])
+
+    return bm_to_mesh(bm, mesh_name)
 
 
 def make_cyl_base_half_round_mesh(
@@ -305,6 +327,493 @@ def make_cyl_base_half_round_mesh(
     bm.free()
     mesh.update()
     return mesh
+
+
+def translate_mesh(mesh: bpy.types.Mesh, vec: Vector):
+    for v in mesh.vertices:
+        v.co += vec
+    mesh.update()
+
+
+def rect_perimeter_points_from_extents(hx: float, hy: float, count: int):
+    count = max(0, int(count))
+    if count <= 0:
+        return []
+    hx = max(0.001, float(hx))
+    hy = max(0.001, float(hy))
+    per = 4.0 * (hx + hy)
+    step = per / count
+    start = step * 0.5
+    pts = []
+
+    def point_at(d):
+        d = d % per
+        segx = 2.0 * hx
+        segy = 2.0 * hy
+        if d < segx:
+            return (hx - d, -hy)
+        if d < segx + segy:
+            d2 = d - segx
+            return (-hx, -hy + d2)
+        if d < segx + segy + segx:
+            d2 = d - (segx + segy)
+            return (-hx + d2, hy)
+        d2 = d - (segx + segy + segx)
+        return (hx, hy - d2)
+
+    for i in range(count):
+        pts.append(point_at(start + (i * step)))
+    return pts
+
+
+def bm_add_box(bm: bmesh.types.BMesh, sx: float, sy: float, sz: float, center, rot_z_rad: float = 0.0):
+    res = bmesh.ops.create_cube(bm, size=1.0)
+    verts = list(res["verts"])
+    bmesh.ops.scale(bm, verts=verts, vec=Vector((max(0.001, sx) * 0.5, max(0.001, sy) * 0.5, max(0.001, sz) * 0.5)))
+    if abs(rot_z_rad) > 1e-9:
+        rot = Matrix.Rotation(rot_z_rad, 3, "Z")
+        bmesh.ops.rotate(bm, verts=verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
+    bmesh.ops.translate(bm, verts=verts, vec=Vector(center))
+
+
+def bm_add_cylinder_z(bm: bmesh.types.BMesh, radius: float, height: float, center, segments: int):
+    res = bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        cap_tris=False,
+        segments=max(12, int(segments)),
+        radius1=max(0.001, float(radius)),
+        radius2=max(0.001, float(radius)),
+        depth=max(0.001, float(height)),
+    )
+    verts = list(res["verts"])
+    bmesh.ops.translate(bm, verts=verts, vec=Vector(center))
+
+
+def bm_add_sphere(bm: bmesh.types.BMesh, radius: float, center, u_segments: int = 24, v_segments: int = 12, scale_xyz=(1.0, 1.0, 1.0)):
+    res = bmesh.ops.create_uvsphere(
+        bm,
+        u_segments=max(8, int(u_segments)),
+        v_segments=max(6, int(v_segments)),
+        radius=max(0.001, float(radius)),
+    )
+    verts = list(res["verts"])
+    sx, sy, sz = scale_xyz
+    if abs(sx - 1.0) > 1e-9 or abs(sy - 1.0) > 1e-9 or abs(sz - 1.0) > 1e-9:
+        bmesh.ops.scale(bm, verts=verts, vec=Vector((sx, sy, sz)))
+    bmesh.ops.translate(bm, verts=verts, vec=Vector(center))
+
+
+def bm_to_mesh(bm: bmesh.types.BMesh, mesh_name: str) -> bpy.types.Mesh:
+    mesh = bpy.data.meshes.new(mesh_name)
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+    return mesh
+
+
+def make_stepped_layers_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    steps_count: int,
+    step_height_mm: float,
+    step_offset_mm: float,
+    at_top: bool,
+    segments: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    n = max(1, int(steps_count))
+    h = max(0.1, float(step_height_mm))
+    off = max(0.0, float(step_offset_mm))
+    for i in range(n):
+        level = i + 1
+        zc = (height_mm - ((i + 0.5) * h)) if at_top else ((i + 0.5) * h)
+        if shape == "BOX":
+            w = width_mm + (2.0 * off * level)
+            l = length_mm + (2.0 * off * level)
+            bm_add_box(bm, w, l, h, (0.0, 0.0, zc))
+        else:
+            d = diameter_mm + (2.0 * off * level)
+            bm_add_cylinder_z(bm, d * 0.5, h, (0.0, 0.0, zc), segments=max(24, int(segments)))
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_vertical_flute_cutters_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    flute_count: int,
+    flute_width_mm: float,
+    flute_depth_mm: float,
+    z_margin_mm: float,
+    segments: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    r = max(0.1, flute_width_mm * 0.5)
+    depth = max(0.05, float(flute_depth_mm))
+    h = max(0.2, height_mm - (2.0 * max(0.0, z_margin_mm)))
+    zc = max(0.1, z_margin_mm) + (h * 0.5)
+    n = max(1, int(flute_count))
+    pts = []
+    if shape == "BOX":
+        hx = (width_mm * 0.5) + r - depth
+        hy = (length_mm * 0.5) + r - depth
+        pts = rect_perimeter_points_from_extents(hx, hy, n)
+    else:
+        rc = (diameter_mm * 0.5) + r - depth
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            pts.append((rc * math.cos(a), rc * math.sin(a)))
+    for (x, y) in pts:
+        bm_add_cylinder_z(bm, r, h, (x, y, zc), segments=max(16, int(segments)))
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_recessed_panels_cutters_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    panel_depth_mm: float,
+    panel_border_mm: float,
+    panel_height_ratio: float,
+    panel_count_cyl: int,
+    segments: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    depth = max(0.1, float(panel_depth_mm))
+    border = max(0.0, float(panel_border_mm))
+    panel_h = max(0.5, height_mm * max(0.1, min(0.95, panel_height_ratio)))
+    zc = height_mm * 0.5
+    if shape == "BOX":
+        pw = max(0.5, width_mm - (2.0 * border))
+        pl = max(0.5, length_mm - (2.0 * border))
+        bm_add_box(bm, pw, depth * 2.0, panel_h, (0.0, (length_mm * 0.5) - depth, zc))
+        bm_add_box(bm, pw, depth * 2.0, panel_h, (0.0, -(length_mm * 0.5) + depth, zc))
+        bm_add_box(bm, depth * 2.0, pl, panel_h, ((width_mm * 0.5) - depth, 0.0, zc))
+        bm_add_box(bm, depth * 2.0, pl, panel_h, (-(width_mm * 0.5) + depth, 0.0, zc))
+    else:
+        n = max(3, int(panel_count_cyl))
+        panel_w = max(0.5, (math.pi * diameter_mm * 0.45) / n)
+        rr = (diameter_mm * 0.5) + (panel_w * 0.5) - depth
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            bm_add_cylinder_z(
+                bm,
+                panel_w * 0.5,
+                panel_h,
+                (rr * math.cos(a), rr * math.sin(a), zc),
+                segments=max(12, int(segments)),
+            )
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_bead_border_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    bead_size_mm: float,
+    bead_spacing_mm: float,
+    bead_rows: int,
+    at_top: bool,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    r = max(0.1, bead_size_mm * 0.5)
+    spacing = max(0.5, float(bead_spacing_mm))
+    rows = max(1, int(bead_rows))
+    for row in range(rows):
+        z = (height_mm - r - (row * bead_size_mm * 0.9)) if at_top else (r + (row * bead_size_mm * 0.9))
+        if shape == "BOX":
+            per = 2.0 * (width_mm + length_mm)
+            n = max(4, int(per / spacing))
+            pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (r * 0.4), (length_mm * 0.5) + (r * 0.4), n)
+            for (x, y) in pts:
+                bm_add_sphere(bm, r, (x, y, z), u_segments=16, v_segments=8)
+        else:
+            per = math.pi * diameter_mm
+            n = max(6, int(per / spacing))
+            rr = (diameter_mm * 0.5) + (r * 0.4)
+            for i in range(n):
+                a = (2.0 * math.pi * i) / n
+                bm_add_sphere(bm, r, (rr * math.cos(a), rr * math.sin(a), z), u_segments=16, v_segments=8)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_rope_band_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    rope_dia_mm: float,
+    rope_pitch_mm: float,
+    at_top: bool,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    r = max(0.1, rope_dia_mm * 0.5)
+    pitch = max(0.5, float(rope_pitch_mm))
+    zc = (height_mm - r) if at_top else r
+    if shape == "BOX":
+        per = 2.0 * (width_mm + length_mm)
+        n = max(8, int(per / pitch))
+        pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (r * 0.5), (length_mm * 0.5) + (r * 0.5), n)
+        for i, (x, y) in enumerate(pts):
+            dz = math.sin((2.0 * math.pi * i * 2.0) / n) * (r * 0.35)
+            bm_add_sphere(bm, r * 0.75, (x, y, zc + dz), u_segments=12, v_segments=8)
+            bm_add_sphere(bm, r * 0.75, (x, y, zc - dz), u_segments=12, v_segments=8)
+    else:
+        per = math.pi * diameter_mm
+        n = max(10, int(per / pitch))
+        rr = (diameter_mm * 0.5) + (r * 0.5)
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            x = rr * math.cos(a)
+            y = rr * math.sin(a)
+            dz = math.sin((2.0 * math.pi * i * 2.0) / n) * (r * 0.35)
+            bm_add_sphere(bm, r * 0.75, (x, y, zc + dz), u_segments=12, v_segments=8)
+            bm_add_sphere(bm, r * 0.75, (x, y, zc - dz), u_segments=12, v_segments=8)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_dentil_course_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    dentil_w_mm: float,
+    dentil_d_mm: float,
+    dentil_h_mm: float,
+    dentil_spacing_mm: float,
+    at_top: bool,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    w = max(0.2, float(dentil_w_mm))
+    d = max(0.2, float(dentil_d_mm))
+    h = max(0.2, float(dentil_h_mm))
+    spacing = max(0.3, float(dentil_spacing_mm))
+    zc = (height_mm - (h * 0.5)) if at_top else (h * 0.5)
+    if shape == "BOX":
+        per = 2.0 * (width_mm + length_mm)
+        n = max(4, int(per / max(spacing, w)))
+        pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (d * 0.5), (length_mm * 0.5) + (d * 0.5), n)
+        for (x, y) in pts:
+            bm_add_box(bm, w, w, h, (x, y, zc))
+    else:
+        per = math.pi * diameter_mm
+        n = max(6, int(per / max(spacing, w)))
+        rr = (diameter_mm * 0.5) + (d * 0.5)
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            x = rr * math.cos(a)
+            y = rr * math.sin(a)
+            bm_add_box(bm, w, d, h, (x, y, zc), rot_z_rad=a)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_scallop_cutters_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    scallop_count: int,
+    scallop_radius_mm: float,
+    scallop_depth_mm: float,
+    scallop_z_mm: float,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    n = max(3, int(scallop_count))
+    r = max(0.1, float(scallop_radius_mm))
+    depth = max(0.05, float(scallop_depth_mm))
+    z = max(r * 0.5, float(scallop_z_mm))
+    pts = []
+    if shape == "BOX":
+        hx = (width_mm * 0.5) + r - depth
+        hy = (length_mm * 0.5) + r - depth
+        pts = rect_perimeter_points_from_extents(hx, hy, n)
+    else:
+        rr = (diameter_mm * 0.5) + r - depth
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            pts.append((rr * math.cos(a), rr * math.sin(a)))
+    for (x, y) in pts:
+        bm_add_sphere(bm, r, (x, y, z), u_segments=16, v_segments=10)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_bosses_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    boss_shape: str,
+    boss_size_mm: float,
+    boss_relief_mm: float,
+    boss_inset_mm: float,
+    boss_count_cyl: int,
+    boss_z_ratio: float,
+    height_mm: float,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    r = max(0.1, float(boss_size_mm) * 0.5)
+    relief = max(0.1, float(boss_relief_mm))
+    z = max(r * 0.5, min(height_mm - (r * 0.5), height_mm * max(0.05, min(0.95, boss_z_ratio))))
+    if shape == "BOX":
+        inset = max(0.0, float(boss_inset_mm))
+        hx = max(0.001, (width_mm * 0.5) - inset)
+        hy = max(0.001, (length_mm * 0.5) - inset)
+        pts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+    else:
+        n = max(3, int(boss_count_cyl))
+        rr = max(0.001, (diameter_mm * 0.5) - max(0.0, float(boss_inset_mm)))
+        pts = []
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            pts.append((rr * math.cos(a), rr * math.sin(a)))
+
+    for (x, y) in pts:
+        if boss_shape == "DISC":
+            bm_add_sphere(bm, r, (x, y, z), u_segments=16, v_segments=10, scale_xyz=(1.0, 1.0, max(0.1, relief / (2.0 * r))))
+        else:
+            bm_add_sphere(bm, r, (x, y, z), u_segments=16, v_segments=10)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_nameplate_cutter_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    height_mm: float,
+    plate_w_mm: float,
+    plate_h_mm: float,
+    plate_d_mm: float,
+    plate_side: str,
+    plate_z_ratio: float,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    pw = max(0.5, float(plate_w_mm))
+    ph = max(0.5, float(plate_h_mm))
+    pd = max(0.1, float(plate_d_mm))
+    zc = max(ph * 0.5, min(height_mm - (ph * 0.5), height_mm * max(0.05, min(0.95, plate_z_ratio))))
+
+    if shape == "BOX":
+        if plate_side == "POS_X":
+            bm_add_box(bm, pd * 2.0, pw, ph, ((width_mm * 0.5) - pd, 0.0, zc))
+        elif plate_side == "NEG_X":
+            bm_add_box(bm, pd * 2.0, pw, ph, (-(width_mm * 0.5) + pd, 0.0, zc))
+        elif plate_side == "NEG_Y":
+            bm_add_box(bm, pw, pd * 2.0, ph, (0.0, -(length_mm * 0.5) + pd, zc))
+        else:
+            bm_add_box(bm, pw, pd * 2.0, ph, (0.0, (length_mm * 0.5) - pd, zc))
+    else:
+        rr = (diameter_mm * 0.5) - pd
+        bm_add_box(bm, pw, pd * 2.0, ph, (0.0, rr, zc))
+    return bm_to_mesh(bm, mesh_name)
+
+
+def make_feet_mesh(
+    shape: str,
+    width_mm: float,
+    length_mm: float,
+    diameter_mm: float,
+    feet_type: str,
+    feet_radius_mm: float,
+    feet_height_mm: float,
+    feet_inset_mm: float,
+    feet_count_cyl: int,
+    mesh_name: str,
+) -> bpy.types.Mesh:
+    bm = bmesh.new()
+    r = max(0.1, float(feet_radius_mm))
+    h = max(0.1, float(feet_height_mm))
+    inset = max(0.0, float(feet_inset_mm))
+
+    if shape == "BOX":
+        hx = max(0.001, (width_mm * 0.5) - inset)
+        hy = max(0.001, (length_mm * 0.5) - inset)
+        pts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+    else:
+        n = max(3, int(feet_count_cyl))
+        rr = max(0.001, (diameter_mm * 0.5) - inset)
+        pts = []
+        for i in range(n):
+            a = (2.0 * math.pi * i) / n
+            pts.append((rr * math.cos(a), rr * math.sin(a)))
+
+    for (x, y) in pts:
+        if feet_type == "BUN":
+            bm_add_sphere(bm, r, (x, y, r * 0.8), u_segments=16, v_segments=10)
+        else:
+            bm_add_cylinder_z(bm, r, h, (x, y, h * 0.5), segments=20)
+    return bm_to_mesh(bm, mesh_name)
+
+
+def apply_surface_texture_stamp(
+    mesh: bpy.types.Mesh,
+    shape: str,
+    strength_mm: float,
+    scale_mm: float,
+    seed: int,
+    zone: str,
+    width_mm: float,
+    length_mm: float,
+):
+    s = float(strength_mm)
+    if abs(s) < 1e-9:
+        return
+    sc = max(0.1, float(scale_mm))
+    if not mesh or not mesh.vertices:
+        return
+
+    z_min = min(v.co.z for v in mesh.vertices)
+    z_max = max(v.co.z for v in mesh.vertices)
+    z_pad = max(0.2, 0.02 * max(1.0, z_max - z_min))
+    x_den = max(0.001, width_mm * 0.5)
+    y_den = max(0.001, length_mm * 0.5)
+
+    for v in mesh.vertices:
+        if zone == "SIDES" and (v.co.z <= z_min + z_pad or v.co.z >= z_max - z_pad):
+            continue
+
+        n1 = math.sin((v.co.x + (seed * 3.17)) / sc)
+        n2 = math.sin((v.co.y - (seed * 1.73)) / (sc * 1.31))
+        n3 = math.sin((v.co.z + (seed * 0.91)) / (sc * 0.73))
+        noise_val = (n1 + n2 + n3) / 3.0
+        disp = s * noise_val
+
+        if shape == "CYL":
+            d = Vector((v.co.x, v.co.y, 0.0))
+            if d.length <= 1e-9:
+                continue
+            d.normalize()
+        else:
+            nx = abs(v.co.x) / x_den
+            ny = abs(v.co.y) / y_den
+            if nx >= ny:
+                d = Vector((1.0 if v.co.x >= 0.0 else -1.0, 0.0, 0.0))
+            else:
+                d = Vector((0.0, 1.0 if v.co.y >= 0.0 else -1.0, 0.0))
+        v.co += d * disp
+    mesh.update()
 
 
 # -----------------------------
@@ -546,6 +1055,19 @@ def add_boolean_union_modifier(target_obj: bpy.types.Object, union_obj: bpy.type
     mod.solver = "EXACT"
     mod.object = union_obj
     return mod
+
+
+def add_helper_boolean_object(
+    coll: bpy.types.Collection,
+    mesh: bpy.types.Mesh,
+    obj_name: str,
+    show_cutters: bool,
+) -> bpy.types.Object:
+    obj = bpy.data.objects.new(obj_name, mesh)
+    coll.objects.link(obj)
+    obj.hide_set(not show_cutters)
+    obj.hide_render = True
+    return obj
 
 
 def apply_all_modifiers(obj: bpy.types.Object):
@@ -809,9 +1331,91 @@ def store_health_report(props: "PlinthGenProps", report, remesh_used: bool):
 
 
 # -----------------------------
+# Unit sync helpers
+# -----------------------------
+def _sync_in_from_mm(props, mm_attr: str, in_attr: str):
+    if getattr(props, "unit_sync_lock", False):
+        return
+    try:
+        props.unit_sync_lock = True
+        setattr(props, in_attr, max(0.0, getattr(props, mm_attr) / MM_PER_INCH))
+    finally:
+        props.unit_sync_lock = False
+
+
+def _sync_mm_from_in(props, mm_attr: str, in_attr: str):
+    if getattr(props, "unit_sync_lock", False):
+        return
+    try:
+        props.unit_sync_lock = True
+        setattr(props, mm_attr, max(0.0, getattr(props, in_attr) * MM_PER_INCH))
+    finally:
+        props.unit_sync_lock = False
+
+
+def _on_width_mm_update(self, context):
+    _sync_in_from_mm(self, "width_mm", "width_in")
+
+
+def _on_length_mm_update(self, context):
+    _sync_in_from_mm(self, "length_mm", "length_in")
+
+
+def _on_height_mm_update(self, context):
+    _sync_in_from_mm(self, "height_mm", "height_in")
+
+
+def _on_diameter_mm_update(self, context):
+    _sync_in_from_mm(self, "diameter_mm", "diameter_in")
+
+
+def _on_cyl_height_mm_update(self, context):
+    _sync_in_from_mm(self, "cyl_height_mm", "cyl_height_in")
+
+
+def _on_width_in_update(self, context):
+    _sync_mm_from_in(self, "width_mm", "width_in")
+
+
+def _on_length_in_update(self, context):
+    _sync_mm_from_in(self, "length_mm", "length_in")
+
+
+def _on_height_in_update(self, context):
+    _sync_mm_from_in(self, "height_mm", "height_in")
+
+
+def _on_diameter_in_update(self, context):
+    _sync_mm_from_in(self, "diameter_mm", "diameter_in")
+
+
+def _on_cyl_height_in_update(self, context):
+    _sync_mm_from_in(self, "cyl_height_mm", "cyl_height_in")
+
+
+def _on_unit_input_update(self, context):
+    # Keep inch fields aligned with mm values when user switches into inch-entry mode.
+    if self.unit_input == "IN":
+        _sync_in_from_mm(self, "width_mm", "width_in")
+        _sync_in_from_mm(self, "length_mm", "length_in")
+        _sync_in_from_mm(self, "height_mm", "height_in")
+        _sync_in_from_mm(self, "diameter_mm", "diameter_in")
+        _sync_in_from_mm(self, "cyl_height_mm", "cyl_height_in")
+
+
+# -----------------------------
 # Properties
 # -----------------------------
 class PlinthGenProps(bpy.types.PropertyGroup):
+    unit_sync_lock: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
+
+    unit_input: bpy.props.EnumProperty(
+        name="Input Units",
+        items=[("MM", "Millimeters", ""), ("IN", "Inches", "")],
+        default="MM",
+        update=_on_unit_input_update,
+    )
+
     shape: bpy.props.EnumProperty(
         name="Plinth Type",
         items=[("BOX", "Box / Rectangle", ""), ("CYL", "Cylinder", "")],
@@ -819,13 +1423,18 @@ class PlinthGenProps(bpy.types.PropertyGroup):
     )
 
     # Box dims
-    width_mm: bpy.props.FloatProperty(name="Width (mm)", default=76.2, min=1.0)
-    length_mm: bpy.props.FloatProperty(name="Length (mm)", default=88.9, min=1.0)
-    height_mm: bpy.props.FloatProperty(name="Height (mm)", default=57.15, min=1.0)
+    width_mm: bpy.props.FloatProperty(name="Width (mm)", default=76.2, min=1.0, update=_on_width_mm_update)
+    length_mm: bpy.props.FloatProperty(name="Length (mm)", default=88.9, min=1.0, update=_on_length_mm_update)
+    height_mm: bpy.props.FloatProperty(name="Height (mm)", default=57.15, min=1.0, update=_on_height_mm_update)
+    width_in: bpy.props.FloatProperty(name="Width (in)", default=3.0, min=0.01, update=_on_width_in_update)
+    length_in: bpy.props.FloatProperty(name="Length (in)", default=3.5, min=0.01, update=_on_length_in_update)
+    height_in: bpy.props.FloatProperty(name="Height (in)", default=2.25, min=0.01, update=_on_height_in_update)
 
     # Cylinder dims
-    diameter_mm: bpy.props.FloatProperty(name="Diameter (mm)", default=76.2, min=1.0)
-    cyl_height_mm: bpy.props.FloatProperty(name="Height (mm)", default=57.15, min=1.0)
+    diameter_mm: bpy.props.FloatProperty(name="Diameter (mm)", default=76.2, min=1.0, update=_on_diameter_mm_update)
+    cyl_height_mm: bpy.props.FloatProperty(name="Height (mm)", default=57.15, min=1.0, update=_on_cyl_height_mm_update)
+    diameter_in: bpy.props.FloatProperty(name="Diameter (in)", default=3.0, min=0.01, update=_on_diameter_in_update)
+    cyl_height_in: bpy.props.FloatProperty(name="Height (in)", default=2.25, min=0.01, update=_on_cyl_height_in_update)
     cyl_segments: bpy.props.IntProperty(name="Cylinder Segments", default=64, min=12, max=256)
 
     # Slope
@@ -853,6 +1462,140 @@ class PlinthGenProps(bpy.types.PropertyGroup):
     base_trim_enabled: bpy.props.BoolProperty(name="Decorative Half-Round Base", default=False)
     base_trim_radius_mm: bpy.props.FloatProperty(name="Half-Round Radius (mm)", default=2.5, min=0.1, max=50.0)
     base_trim_segments: bpy.props.IntProperty(name="Trim Segments", default=32, min=12, max=128)
+
+    # Decorative profile band (ogee/cove/convex)
+    profile_band_enabled: bpy.props.BoolProperty(name="Profile Band", default=False)
+    profile_band_style: bpy.props.EnumProperty(
+        name="Profile Style",
+        items=[("OGEE", "Ogee", ""), ("COVE", "Cove", ""), ("CONVEX", "Convex", "")],
+        default="OGEE",
+    )
+    profile_band_position: bpy.props.EnumProperty(
+        name="Band Position",
+        items=[("BASE", "Base", ""), ("TOP", "Top", "")],
+        default="BASE",
+    )
+    profile_band_height_mm: bpy.props.FloatProperty(name="Band Height (mm)", default=4.0, min=0.2, max=100.0)
+    profile_band_depth_mm: bpy.props.FloatProperty(name="Band Depth (mm)", default=1.5, min=0.1, max=50.0)
+    profile_band_segments: bpy.props.IntProperty(name="Band Segments", default=24, min=12, max=128)
+
+    # Stepped layers
+    steps_enabled: bpy.props.BoolProperty(name="Stepped Layers", default=False)
+    steps_count: bpy.props.IntProperty(name="Step Count", default=2, min=1, max=6)
+    steps_height_mm: bpy.props.FloatProperty(name="Step Height (mm)", default=2.0, min=0.1, max=50.0)
+    steps_offset_mm: bpy.props.FloatProperty(name="Step Offset (mm)", default=1.5, min=0.0, max=50.0)
+    steps_position: bpy.props.EnumProperty(
+        name="Steps Position",
+        items=[("BASE", "Base", ""), ("TOP", "Top", "")],
+        default="BASE",
+    )
+
+    # Vertical fluting
+    fluting_enabled: bpy.props.BoolProperty(name="Vertical Fluting", default=False)
+    fluting_count: bpy.props.IntProperty(name="Flute Count", default=16, min=1, max=128)
+    fluting_width_mm: bpy.props.FloatProperty(name="Flute Width (mm)", default=2.5, min=0.2, max=50.0)
+    fluting_depth_mm: bpy.props.FloatProperty(name="Flute Depth (mm)", default=0.8, min=0.05, max=25.0)
+    fluting_z_margin_mm: bpy.props.FloatProperty(name="Flute Z Margin (mm)", default=2.0, min=0.0, max=50.0)
+
+    # Recessed side panels
+    panels_enabled: bpy.props.BoolProperty(name="Recessed Side Panels", default=False)
+    panel_depth_mm: bpy.props.FloatProperty(name="Panel Depth (mm)", default=1.0, min=0.1, max=25.0)
+    panel_border_mm: bpy.props.FloatProperty(name="Panel Border (mm)", default=6.0, min=0.0, max=100.0)
+    panel_height_ratio: bpy.props.FloatProperty(name="Panel Height Ratio", default=0.6, min=0.1, max=0.95)
+    panel_count_cyl: bpy.props.IntProperty(name="Panel Count (Cylinder)", default=4, min=3, max=24)
+
+    # Bead border
+    beads_enabled: bpy.props.BoolProperty(name="Bead Border", default=False)
+    bead_size_mm: bpy.props.FloatProperty(name="Bead Size (mm)", default=1.5, min=0.2, max=20.0)
+    bead_spacing_mm: bpy.props.FloatProperty(name="Bead Spacing (mm)", default=5.0, min=0.5, max=100.0)
+    bead_rows: bpy.props.IntProperty(name="Bead Rows", default=1, min=1, max=4)
+    bead_position: bpy.props.EnumProperty(
+        name="Bead Position",
+        items=[("BASE", "Base", ""), ("TOP", "Top", "")],
+        default="BASE",
+    )
+
+    # Rope twist band
+    rope_enabled: bpy.props.BoolProperty(name="Rope Twist Band", default=False)
+    rope_dia_mm: bpy.props.FloatProperty(name="Rope Diameter (mm)", default=2.0, min=0.2, max=30.0)
+    rope_pitch_mm: bpy.props.FloatProperty(name="Rope Pitch (mm)", default=6.0, min=0.5, max=100.0)
+    rope_position: bpy.props.EnumProperty(
+        name="Rope Position",
+        items=[("BASE", "Base", ""), ("TOP", "Top", "")],
+        default="TOP",
+    )
+
+    # Dentil course
+    dentil_enabled: bpy.props.BoolProperty(name="Dentil Course", default=False)
+    dentil_width_mm: bpy.props.FloatProperty(name="Dentil Width (mm)", default=2.0, min=0.2, max=50.0)
+    dentil_depth_mm: bpy.props.FloatProperty(name="Dentil Depth (mm)", default=1.5, min=0.1, max=25.0)
+    dentil_height_mm: bpy.props.FloatProperty(name="Dentil Height (mm)", default=2.0, min=0.1, max=25.0)
+    dentil_spacing_mm: bpy.props.FloatProperty(name="Dentil Spacing (mm)", default=4.0, min=0.2, max=100.0)
+    dentil_position: bpy.props.EnumProperty(
+        name="Dentil Position",
+        items=[("TOP", "Top", ""), ("BASE", "Base", "")],
+        default="TOP",
+    )
+
+    # Scalloped skirt
+    scallop_enabled: bpy.props.BoolProperty(name="Scalloped Skirt", default=False)
+    scallop_count: bpy.props.IntProperty(name="Scallop Count", default=12, min=3, max=128)
+    scallop_radius_mm: bpy.props.FloatProperty(name="Scallop Radius (mm)", default=2.5, min=0.1, max=50.0)
+    scallop_depth_mm: bpy.props.FloatProperty(name="Scallop Depth (mm)", default=1.0, min=0.05, max=25.0)
+    scallop_z_mm: bpy.props.FloatProperty(name="Scallop Center Z (mm)", default=3.0, min=0.0, max=1000.0)
+
+    # Corner bosses / medallions
+    bosses_enabled: bpy.props.BoolProperty(name="Corner Bosses / Medallions", default=False)
+    boss_shape: bpy.props.EnumProperty(
+        name="Boss Shape",
+        items=[("DISC", "Disc", ""), ("SPHERE", "Sphere", "")],
+        default="DISC",
+    )
+    boss_size_mm: bpy.props.FloatProperty(name="Boss Size (mm)", default=4.0, min=0.2, max=100.0)
+    boss_relief_mm: bpy.props.FloatProperty(name="Boss Relief (mm)", default=1.5, min=0.1, max=50.0)
+    boss_inset_mm: bpy.props.FloatProperty(name="Boss Inset (mm)", default=4.0, min=0.0, max=100.0)
+    boss_count_cyl: bpy.props.IntProperty(name="Boss Count (Cylinder)", default=6, min=3, max=64)
+    boss_z_ratio: bpy.props.FloatProperty(name="Boss Z Ratio", default=0.5, min=0.05, max=0.95)
+
+    # Nameplate recess
+    nameplate_enabled: bpy.props.BoolProperty(name="Nameplate Recess", default=False)
+    nameplate_width_mm: bpy.props.FloatProperty(name="Nameplate Width (mm)", default=24.0, min=0.5, max=500.0)
+    nameplate_height_mm: bpy.props.FloatProperty(name="Nameplate Height (mm)", default=12.0, min=0.5, max=500.0)
+    nameplate_depth_mm: bpy.props.FloatProperty(name="Nameplate Depth (mm)", default=1.0, min=0.1, max=50.0)
+    nameplate_side: bpy.props.EnumProperty(
+        name="Nameplate Side",
+        items=[
+            ("POS_Y", "Front (+Y)", ""),
+            ("NEG_Y", "Back (-Y)", ""),
+            ("POS_X", "Right (+X)", ""),
+            ("NEG_X", "Left (-X)", ""),
+        ],
+        default="POS_Y",
+    )
+    nameplate_z_ratio: bpy.props.FloatProperty(name="Nameplate Z Ratio", default=0.5, min=0.05, max=0.95)
+
+    # Surface texture stamp
+    texture_enabled: bpy.props.BoolProperty(name="Surface Texture Stamp", default=False)
+    texture_strength_mm: bpy.props.FloatProperty(name="Texture Strength (mm)", default=0.2, min=0.0, max=10.0)
+    texture_scale_mm: bpy.props.FloatProperty(name="Texture Scale (mm)", default=3.0, min=0.1, max=100.0)
+    texture_seed: bpy.props.IntProperty(name="Texture Seed", default=1, min=0, max=1000000)
+    texture_zone: bpy.props.EnumProperty(
+        name="Texture Zone",
+        items=[("SIDES", "Sides Only", ""), ("ALL", "All Faces", "")],
+        default="SIDES",
+    )
+
+    # Foot pads / bun feet
+    feet_enabled: bpy.props.BoolProperty(name="Foot Pads / Bun Feet", default=False)
+    feet_type: bpy.props.EnumProperty(
+        name="Feet Type",
+        items=[("PAD", "Pad", ""), ("BUN", "Bun", "")],
+        default="PAD",
+    )
+    feet_radius_mm: bpy.props.FloatProperty(name="Feet Radius (mm)", default=2.0, min=0.1, max=100.0)
+    feet_height_mm: bpy.props.FloatProperty(name="Feet Height (mm)", default=2.0, min=0.1, max=100.0)
+    feet_inset_mm: bpy.props.FloatProperty(name="Feet Inset (mm)", default=4.0, min=0.0, max=200.0)
+    feet_count_cyl: bpy.props.IntProperty(name="Feet Count (Cylinder)", default=4, min=3, max=64)
 
     # Magnets
     magnets_count: bpy.props.IntProperty(name="# Magnets", default=4, min=0, max=64)
@@ -1069,6 +1812,36 @@ def preflight_validate(props: PlinthGenProps):
     if props.health_block_preview_on_fail and not props.health_check_enabled:
         warnings.append("Block Preview On Fail is ignored when Post-Build Health Check is disabled.")
 
+    # Decorative feature sanity checks.
+    if props.steps_enabled and (props.steps_count * props.steps_height_mm) > body_h:
+        warnings.append("Stepped layer stack is taller than body height.")
+    if props.fluting_enabled and (2.0 * props.fluting_z_margin_mm) >= body_h:
+        warnings.append("Flute Z margin leaves little or no usable flute height.")
+    if props.panels_enabled:
+        if props.shape == "BOX":
+            if (2.0 * props.panel_border_mm) >= props.width_mm or (2.0 * props.panel_border_mm) >= props.length_mm:
+                warnings.append("Panel border is too large for current box dimensions.")
+        elif props.panel_count_cyl < 3:
+            warnings.append("Cylinder panel count should be at least 3.")
+    if props.nameplate_enabled:
+        if props.shape == "BOX":
+            if props.nameplate_side in {"POS_Y", "NEG_Y"} and props.nameplate_width_mm >= props.width_mm:
+                warnings.append("Nameplate width is large for selected side.")
+            if props.nameplate_side in {"POS_X", "NEG_X"} and props.nameplate_width_mm >= props.length_mm:
+                warnings.append("Nameplate width is large for selected side.")
+        else:
+            if props.nameplate_width_mm >= (math.pi * props.diameter_mm * 0.5):
+                warnings.append("Nameplate width is large for selected cylinder diameter.")
+    if props.texture_enabled and props.texture_strength_mm > max(0.2, body_min_planar * 0.05):
+        warnings.append("Texture strength is high relative to plinth size.")
+    if props.feet_enabled:
+        if props.shape == "BOX":
+            if props.feet_inset_mm >= (min(props.width_mm, props.length_mm) * 0.5):
+                warnings.append("Feet inset is large and may collapse feet positions.")
+        else:
+            if props.feet_inset_mm >= (props.diameter_mm * 0.5):
+                warnings.append("Feet inset is large and may collapse feet positions.")
+
     # Deduplicate while preserving order.
     dedup_errors = list(dict.fromkeys(errors))
     dedup_warnings = list(dict.fromkeys(warnings))
@@ -1103,6 +1876,9 @@ def build_plinth(context, props: PlinthGenProps):
 
     high_positive = (props.slope_high_side == "POS")
     slope_on = props.slope_enabled and props.slope_delta_mm > 0.0
+    body_h = props.height_mm if props.shape == "BOX" else props.cyl_height_mm
+    body_w = props.width_mm if props.shape == "BOX" else props.diameter_mm
+    body_l = props.length_mm if props.shape == "BOX" else props.diameter_mm
 
     # MAIN
     if props.shape == "BOX":
@@ -1293,6 +2069,232 @@ def build_plinth(context, props: PlinthGenProps):
         trim_obj.hide_render = True
         add_boolean_union_modifier(main_obj, trim_obj, "BaseTrimUnion")
 
+    # PROFILE BAND (ogee / cove / convex)
+    if props.profile_band_enabled:
+        band_h = max(0.2, props.profile_band_height_mm)
+        band_d = max(0.1, props.profile_band_depth_mm)
+        at_top = (props.profile_band_position == "TOP")
+        band_center = (body_h - (band_h * 0.5)) if at_top else (band_h * 0.5)
+
+        if props.profile_band_style in {"CONVEX", "OGEE"}:
+            zc = band_center - (band_d * 0.25 if props.profile_band_style == "OGEE" else 0.0)
+            if props.shape == "BOX":
+                mesh_union = make_box_base_half_round_mesh(
+                    props.width_mm,
+                    props.length_mm,
+                    band_d,
+                    props.profile_band_segments,
+                    "Plinth_ProfileBandUnionBoxMesh_v3_3",
+                )
+            else:
+                mesh_union = make_cyl_base_half_round_mesh(
+                    props.diameter_mm * 0.5,
+                    band_d,
+                    max(24, int(props.cyl_segments)),
+                    props.profile_band_segments,
+                    "Plinth_ProfileBandUnionCylMesh_v3_3",
+                )
+            translate_mesh(mesh_union, Vector((0.0, 0.0, zc - band_d)))
+            obj_union = add_helper_boolean_object(coll, mesh_union, "Plinth_ProfileBandUnion_v3_3", props.show_cutters)
+            add_boolean_union_modifier(main_obj, obj_union, "ProfileBandUnion")
+
+        if props.profile_band_style in {"COVE", "OGEE"}:
+            zc = band_center + (band_d * 0.25 if props.profile_band_style == "OGEE" else 0.0)
+            if props.shape == "BOX":
+                mesh_cut = make_box_base_half_round_mesh(
+                    props.width_mm,
+                    props.length_mm,
+                    band_d,
+                    props.profile_band_segments,
+                    "Plinth_ProfileBandCutBoxMesh_v3_3",
+                )
+            else:
+                mesh_cut = make_cyl_base_half_round_mesh(
+                    props.diameter_mm * 0.5,
+                    band_d,
+                    max(24, int(props.cyl_segments)),
+                    props.profile_band_segments,
+                    "Plinth_ProfileBandCutCylMesh_v3_3",
+                )
+            translate_mesh(mesh_cut, Vector((0.0, 0.0, zc - band_d)))
+            obj_cut = add_helper_boolean_object(coll, mesh_cut, "Plinth_ProfileBandCut_v3_3", props.show_cutters)
+            add_boolean_modifier(main_obj, obj_cut, "ProfileBandCut")
+
+    # STEPPED LAYERS
+    if props.steps_enabled:
+        mesh_steps = make_stepped_layers_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            steps_count=props.steps_count,
+            step_height_mm=props.steps_height_mm,
+            step_offset_mm=props.steps_offset_mm,
+            at_top=(props.steps_position == "TOP"),
+            segments=max(24, int(props.cyl_segments)),
+            mesh_name="Plinth_SteppedLayersMesh_v3_3",
+        )
+        obj_steps = add_helper_boolean_object(coll, mesh_steps, "Plinth_SteppedLayers_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_steps, "SteppedLayersUnion")
+
+    # VERTICAL FLUTING
+    if props.fluting_enabled:
+        mesh_flutes = make_vertical_flute_cutters_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            flute_count=props.fluting_count,
+            flute_width_mm=props.fluting_width_mm,
+            flute_depth_mm=props.fluting_depth_mm,
+            z_margin_mm=props.fluting_z_margin_mm,
+            segments=max(16, int(props.cyl_segments)),
+            mesh_name="Plinth_FlutingCuttersMesh_v3_3",
+        )
+        obj_flutes = add_helper_boolean_object(coll, mesh_flutes, "Plinth_FlutingCutters_v3_3", props.show_cutters)
+        add_boolean_modifier(main_obj, obj_flutes, "FlutingCut")
+
+    # RECESSED SIDE PANELS
+    if props.panels_enabled:
+        mesh_panels = make_recessed_panels_cutters_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            panel_depth_mm=props.panel_depth_mm,
+            panel_border_mm=props.panel_border_mm,
+            panel_height_ratio=props.panel_height_ratio,
+            panel_count_cyl=props.panel_count_cyl,
+            segments=max(16, int(props.cyl_segments)),
+            mesh_name="Plinth_RecessedPanelsCuttersMesh_v3_3",
+        )
+        obj_panels = add_helper_boolean_object(coll, mesh_panels, "Plinth_RecessedPanelsCutters_v3_3", props.show_cutters)
+        add_boolean_modifier(main_obj, obj_panels, "PanelCut")
+
+    # BEAD BORDER
+    if props.beads_enabled:
+        mesh_beads = make_bead_border_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            bead_size_mm=props.bead_size_mm,
+            bead_spacing_mm=props.bead_spacing_mm,
+            bead_rows=props.bead_rows,
+            at_top=(props.bead_position == "TOP"),
+            mesh_name="Plinth_BeadBorderMesh_v3_3",
+        )
+        obj_beads = add_helper_boolean_object(coll, mesh_beads, "Plinth_BeadBorder_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_beads, "BeadBorderUnion")
+
+    # ROPE TWIST BAND
+    if props.rope_enabled:
+        mesh_rope = make_rope_band_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            rope_dia_mm=props.rope_dia_mm,
+            rope_pitch_mm=props.rope_pitch_mm,
+            at_top=(props.rope_position == "TOP"),
+            mesh_name="Plinth_RopeBandMesh_v3_3",
+        )
+        obj_rope = add_helper_boolean_object(coll, mesh_rope, "Plinth_RopeBand_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_rope, "RopeBandUnion")
+
+    # DENTIL COURSE
+    if props.dentil_enabled:
+        mesh_dentil = make_dentil_course_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            dentil_w_mm=props.dentil_width_mm,
+            dentil_d_mm=props.dentil_depth_mm,
+            dentil_h_mm=props.dentil_height_mm,
+            dentil_spacing_mm=props.dentil_spacing_mm,
+            at_top=(props.dentil_position == "TOP"),
+            mesh_name="Plinth_DentilCourseMesh_v3_3",
+        )
+        obj_dentil = add_helper_boolean_object(coll, mesh_dentil, "Plinth_DentilCourse_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_dentil, "DentilUnion")
+
+    # SCALLOPED SKIRT
+    if props.scallop_enabled:
+        mesh_scallop = make_scallop_cutters_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            scallop_count=props.scallop_count,
+            scallop_radius_mm=props.scallop_radius_mm,
+            scallop_depth_mm=props.scallop_depth_mm,
+            scallop_z_mm=props.scallop_z_mm,
+            mesh_name="Plinth_ScallopCuttersMesh_v3_3",
+        )
+        obj_scallop = add_helper_boolean_object(coll, mesh_scallop, "Plinth_ScallopCutters_v3_3", props.show_cutters)
+        add_boolean_modifier(main_obj, obj_scallop, "ScallopCut")
+
+    # CORNER BOSSES / MEDALLIONS
+    if props.bosses_enabled:
+        mesh_boss = make_bosses_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            boss_shape=props.boss_shape,
+            boss_size_mm=props.boss_size_mm,
+            boss_relief_mm=props.boss_relief_mm,
+            boss_inset_mm=props.boss_inset_mm,
+            boss_count_cyl=props.boss_count_cyl,
+            boss_z_ratio=props.boss_z_ratio,
+            height_mm=body_h,
+            mesh_name="Plinth_BossesMesh_v3_3",
+        )
+        obj_boss = add_helper_boolean_object(coll, mesh_boss, "Plinth_Bosses_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_boss, "BossUnion")
+
+    # NAMEPLATE RECESS
+    if props.nameplate_enabled:
+        mesh_nameplate = make_nameplate_cutter_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            height_mm=body_h,
+            plate_w_mm=props.nameplate_width_mm,
+            plate_h_mm=props.nameplate_height_mm,
+            plate_d_mm=props.nameplate_depth_mm,
+            plate_side=props.nameplate_side,
+            plate_z_ratio=props.nameplate_z_ratio,
+            mesh_name="Plinth_NameplateCutterMesh_v3_3",
+        )
+        obj_nameplate = add_helper_boolean_object(coll, mesh_nameplate, "Plinth_NameplateCutter_v3_3", props.show_cutters)
+        add_boolean_modifier(main_obj, obj_nameplate, "NameplateCut")
+
+    # FOOT PADS / BUN FEET
+    if props.feet_enabled:
+        mesh_feet = make_feet_mesh(
+            shape=props.shape,
+            width_mm=props.width_mm,
+            length_mm=props.length_mm,
+            diameter_mm=props.diameter_mm,
+            feet_type=props.feet_type,
+            feet_radius_mm=props.feet_radius_mm,
+            feet_height_mm=props.feet_height_mm,
+            feet_inset_mm=props.feet_inset_mm,
+            feet_count_cyl=props.feet_count_cyl,
+            mesh_name="Plinth_FeetMesh_v3_3",
+        )
+        obj_feet = add_helper_boolean_object(coll, mesh_feet, "Plinth_Feet_v3_3", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_feet, "FeetUnion")
+
     # PREVIEW (export this)
     if props.preview_cuts_duplicate:
         preview = main_obj.copy()
@@ -1302,6 +2304,19 @@ def build_plinth(context, props: PlinthGenProps):
 
         apply_all_modifiers(preview)
         ground_mesh_to_z0(preview.data)
+
+        if props.texture_enabled and props.texture_strength_mm > 0.0:
+            apply_surface_texture_stamp(
+                preview.data,
+                shape=props.shape,
+                strength_mm=props.texture_strength_mm,
+                scale_mm=props.texture_scale_mm,
+                seed=props.texture_seed,
+                zone=props.texture_zone,
+                width_mm=body_w,
+                length_mm=body_l,
+            )
+            ground_mesh_to_z0(preview.data)
 
         remesh_used = False
         if props.manifold_guarantee:
@@ -1420,13 +2435,28 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
 
         dims = layout.box()
         dims.label(text="Dimensions")
+        dims.prop(p, "unit_input")
         if p.shape == "BOX":
-            dims.prop(p, "width_mm")
-            dims.prop(p, "length_mm")
-            dims.prop(p, "height_mm")
+            if p.unit_input == "IN":
+                dims.prop(p, "width_in")
+                dims.label(text=f"Width: {p.width_mm:.3f} mm")
+                dims.prop(p, "length_in")
+                dims.label(text=f"Length: {p.length_mm:.3f} mm")
+                dims.prop(p, "height_in")
+                dims.label(text=f"Height: {p.height_mm:.3f} mm")
+            else:
+                dims.prop(p, "width_mm")
+                dims.prop(p, "length_mm")
+                dims.prop(p, "height_mm")
         else:
-            dims.prop(p, "diameter_mm")
-            dims.prop(p, "cyl_height_mm")
+            if p.unit_input == "IN":
+                dims.prop(p, "diameter_in")
+                dims.label(text=f"Diameter: {p.diameter_mm:.3f} mm")
+                dims.prop(p, "cyl_height_in")
+                dims.label(text=f"Height: {p.cyl_height_mm:.3f} mm")
+            else:
+                dims.prop(p, "diameter_mm")
+                dims.prop(p, "cyl_height_mm")
             dims.prop(p, "cyl_segments")
 
         sl = layout.box()
@@ -1458,6 +2488,138 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
         col.enabled = p.base_trim_enabled
         col.prop(p, "base_trim_radius_mm")
         col.prop(p, "base_trim_segments")
+
+        deco = layout.box()
+        deco.label(text="Decorations")
+
+        p1 = deco.box()
+        p1.label(text="1) Ogee / Cove / Convex Band")
+        p1.prop(p, "profile_band_enabled")
+        col = p1.column()
+        col.enabled = p.profile_band_enabled
+        col.prop(p, "profile_band_style")
+        col.prop(p, "profile_band_position")
+        col.prop(p, "profile_band_height_mm")
+        col.prop(p, "profile_band_depth_mm")
+        col.prop(p, "profile_band_segments")
+
+        p2 = deco.box()
+        p2.label(text="2) Stepped Layers")
+        p2.prop(p, "steps_enabled")
+        col = p2.column()
+        col.enabled = p.steps_enabled
+        col.prop(p, "steps_count")
+        col.prop(p, "steps_height_mm")
+        col.prop(p, "steps_offset_mm")
+        col.prop(p, "steps_position")
+
+        p3 = deco.box()
+        p3.label(text="3) Vertical Fluting")
+        p3.prop(p, "fluting_enabled")
+        col = p3.column()
+        col.enabled = p.fluting_enabled
+        col.prop(p, "fluting_count")
+        col.prop(p, "fluting_width_mm")
+        col.prop(p, "fluting_depth_mm")
+        col.prop(p, "fluting_z_margin_mm")
+
+        p4 = deco.box()
+        p4.label(text="4) Recessed Side Panels")
+        p4.prop(p, "panels_enabled")
+        col = p4.column()
+        col.enabled = p.panels_enabled
+        col.prop(p, "panel_depth_mm")
+        col.prop(p, "panel_border_mm")
+        col.prop(p, "panel_height_ratio")
+        if p.shape == "CYL":
+            col.prop(p, "panel_count_cyl")
+
+        p5 = deco.box()
+        p5.label(text="5) Bead Border")
+        p5.prop(p, "beads_enabled")
+        col = p5.column()
+        col.enabled = p.beads_enabled
+        col.prop(p, "bead_size_mm")
+        col.prop(p, "bead_spacing_mm")
+        col.prop(p, "bead_rows")
+        col.prop(p, "bead_position")
+
+        p6 = deco.box()
+        p6.label(text="6) Rope Twist Band")
+        p6.prop(p, "rope_enabled")
+        col = p6.column()
+        col.enabled = p.rope_enabled
+        col.prop(p, "rope_dia_mm")
+        col.prop(p, "rope_pitch_mm")
+        col.prop(p, "rope_position")
+
+        p7 = deco.box()
+        p7.label(text="7) Dentil Course")
+        p7.prop(p, "dentil_enabled")
+        col = p7.column()
+        col.enabled = p.dentil_enabled
+        col.prop(p, "dentil_width_mm")
+        col.prop(p, "dentil_depth_mm")
+        col.prop(p, "dentil_height_mm")
+        col.prop(p, "dentil_spacing_mm")
+        col.prop(p, "dentil_position")
+
+        p8 = deco.box()
+        p8.label(text="8) Scalloped Skirt")
+        p8.prop(p, "scallop_enabled")
+        col = p8.column()
+        col.enabled = p.scallop_enabled
+        col.prop(p, "scallop_count")
+        col.prop(p, "scallop_radius_mm")
+        col.prop(p, "scallop_depth_mm")
+        col.prop(p, "scallop_z_mm")
+
+        p9 = deco.box()
+        p9.label(text="9) Corner Bosses / Medallions")
+        p9.prop(p, "bosses_enabled")
+        col = p9.column()
+        col.enabled = p.bosses_enabled
+        col.prop(p, "boss_shape")
+        col.prop(p, "boss_size_mm")
+        col.prop(p, "boss_relief_mm")
+        col.prop(p, "boss_inset_mm")
+        col.prop(p, "boss_z_ratio")
+        if p.shape == "CYL":
+            col.prop(p, "boss_count_cyl")
+
+        p10 = deco.box()
+        p10.label(text="10) Nameplate Recess")
+        p10.prop(p, "nameplate_enabled")
+        col = p10.column()
+        col.enabled = p.nameplate_enabled
+        col.prop(p, "nameplate_width_mm")
+        col.prop(p, "nameplate_height_mm")
+        col.prop(p, "nameplate_depth_mm")
+        if p.shape == "BOX":
+            col.prop(p, "nameplate_side")
+        col.prop(p, "nameplate_z_ratio")
+
+        p11 = deco.box()
+        p11.label(text="11) Surface Texture Stamp")
+        p11.prop(p, "texture_enabled")
+        col = p11.column()
+        col.enabled = p.texture_enabled
+        col.prop(p, "texture_strength_mm")
+        col.prop(p, "texture_scale_mm")
+        col.prop(p, "texture_seed")
+        col.prop(p, "texture_zone")
+
+        p12 = deco.box()
+        p12.label(text="12) Foot Pads / Bun Feet")
+        p12.prop(p, "feet_enabled")
+        col = p12.column()
+        col.enabled = p.feet_enabled
+        col.prop(p, "feet_type")
+        col.prop(p, "feet_radius_mm")
+        col.prop(p, "feet_height_mm")
+        col.prop(p, "feet_inset_mm")
+        if p.shape == "CYL":
+            col.prop(p, "feet_count_cyl")
 
         mg = layout.box()
         mg.label(text="Magnets")

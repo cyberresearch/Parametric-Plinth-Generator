@@ -12,6 +12,7 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 - Top-only slope controls
 - Hollow interior (open or sealed bottom)
 - Magnet pockets (box perimeter/corners, cylinder ring)
+- Single-magnet mode centers the pocket on the plinth
 - Standard drain/vent holes plus optional drains at magnet centers (sealed hollow mode)
 - Decorative half-round base trim
 - Expanded decorative profile suite (bands, steps, fluting, panels, beads, rope, dentils, scallops, bosses, nameplate recess, texture stamp, feet)
@@ -41,6 +42,22 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 6. Re-enable the addon.
 7. Reopen your `.blend` file and run `Force Rebuild` once to refresh generated geometry.
 
+## Quick Use
+1. Open the `Plinth v3.3` tab in the 3D View sidebar.
+2. Choose `Box / Rectangle` or `Cylinder`.
+3. Set `Input Units` before entering dimensions.
+4. Enable and tune the features you need: slope, hollowing, magnets, drains, trim, and decorations.
+5. Review the `Preflight` box and fix any hard errors before building.
+6. Click `Create` for a fresh build in the current scene.
+7. Use `Force Rebuild` after changing options on an existing plinth setup.
+
+## Build Behavior
+- `Create` builds a new plinth using the current panel settings.
+- `Force Rebuild` reruns the build with the current settings and is the safer choice after updating the addon or changing many parameters.
+- Successful `Create` and `Force Rebuild` remove existing mesh objects in the scene before generating the plinth.
+- Preflight hard errors cancel the operation before mesh deletion.
+- When `Preview Cuts (Duplicate)` is enabled, the preview mesh is the export-ready object and the driver object is hidden.
+
 ## Recommended Robust Workflow
 1. Set `Input Units` first, then enter dimensions and feature options (`Hollow`, `Magnets`, `Drain / Vent Holes`, `Base Trim`, decorations).
 2. Review the `Preflight` box and resolve any errors before building.
@@ -58,3 +75,38 @@ Blender addon for generating parametric plinth geometry for resin printing workf
   - Face island count
   - Inverted normals flag
 - When manifold remesh runs, the health report indicates that remesh was applied.
+
+## Development And Validation
+- This addon does not have a separate packaging or compile step. Blender installs `addon/plinth_generator_v3_3.py` directly.
+- Manual coverage lives in `TEST_PLAN.md`.
+- Automated validation lives in `tests/test_plan_harness.py`.
+
+Run the full headless harness from the repo root:
+
+```bash
+blender --background --factory-startup --python tests/test_plan_harness.py
+```
+
+If `blender` is not on `PATH` on macOS, use:
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python tests/test_plan_harness.py
+```
+
+Run selected cases:
+
+```bash
+blender --background --factory-startup --python tests/test_plan_harness.py -- --case T14 --case T18
+```
+
+List supported test IDs:
+
+```bash
+blender --background --factory-startup --python tests/test_plan_harness.py -- --list
+```
+
+Write a JSON report:
+
+```bash
+blender --background --factory-startup --python tests/test_plan_harness.py -- --json-out /tmp/plinth_test_report.json
+```

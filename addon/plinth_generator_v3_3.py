@@ -1049,6 +1049,8 @@ def rect_perimeter_centered_points(width_mm, length_mm, inset_mm, radius_mm, cou
     count = max(0, int(count))
     if count == 0:
         return []
+    if count == 1:
+        return [(0.0, 0.0)]
 
     hx = max(0.001, width_mm * 0.5 - inset_mm - radius_mm)
     hy = max(0.001, length_mm * 0.5 - inset_mm - radius_mm)
@@ -1090,6 +1092,8 @@ def rect_corner_points(width_mm, length_mm, inset_mm, radius_mm, count):
     count = max(0, int(count))
     if count == 0:
         return []
+    if count == 1:
+        return [(0.0, 0.0)]
 
     hx = max(0.001, width_mm * 0.5 - inset_mm - radius_mm)
     hy = max(0.001, length_mm * 0.5 - inset_mm - radius_mm)
@@ -1104,6 +1108,8 @@ def circle_ring_points(diameter_mm, inset_mm, radius_mm, count):
     count = max(0, int(count))
     if count == 0:
         return []
+    if count == 1:
+        return [(0.0, 0.0)]
     r_outer = diameter_mm * 0.5
     r_place = max(0.001, r_outer - inset_mm - radius_mm)
     pts = []

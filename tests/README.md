@@ -38,6 +38,6 @@ blender --background --factory-startup --python tests/test_plan_harness.py -- --
 
 ## Notes
 
-- The harness maps one test handler per `T01`..`T26`.
+- The harness maps one test handler per `T01`..`T26` and includes supplemental `Rxx` regression cases for behavior not yet called out in `TEST_PLAN.md`.
 - Visual outcomes in the manual plan are represented with headless structural checks where possible (modifiers, object states, dimensions, health/preflight status).
 - Each case runs from a reset baseline so unrelated feature defaults do not interfere with targeted assertions.

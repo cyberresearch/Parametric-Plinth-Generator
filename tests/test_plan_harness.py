@@ -81,6 +81,9 @@ class Harness:
         ("T24", "Inch input drives mm (CYL)"),
         ("T25", "mm input back-sync to inches"),
         ("T26", "Unit mode does not break manifold/health path"),
+        ("R01", "Single BOX perimeter magnet centers"),
+        ("R02", "Single BOX corner-layout magnet centers"),
+        ("R03", "Single CYL magnet centers"),
     ]
 
     def __init__(self, addon_path: str):
@@ -308,6 +311,13 @@ class Harness:
         coords = self._mesh_world_coords(obj)
         self._assert_true(bool(coords), f"Object '{obj.name}' has no vertices.")
         return max(c.z for c in coords)
+
+    def _mesh_xy_center(self, obj):
+        coords = self._mesh_world_coords(obj)
+        self._assert_true(bool(coords), f"Object '{obj.name}' has no vertices.")
+        xs = [c.x for c in coords]
+        ys = [c.y for c in coords]
+        return ((max(xs) + min(xs)) * 0.5, (max(ys) + min(ys)) * 0.5)
 
     def _side_peak_z(self, obj, axis: str, positive: bool):
         coords = self._mesh_world_coords(obj)
@@ -680,6 +690,38 @@ class Harness:
         self._run_create_expect_finished()
         self._assert_true(p.health_last_ran, "Health report should run for inch-input manifold/health case.")
 
+    def _assert_single_magnet_centered(self):
+        cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)
+        cx, cy = self._mesh_xy_center(cutters_obj)
+        self._assert_close(cx, 0.0, 0.05, "Single magnet X center")
+        self._assert_close(cy, 0.0, 0.05, "Single magnet Y center")
+
+    def case_r01(self):
+        p = self.props
+        p.shape = "BOX"
+        p.magnets_count = 1
+        p.magnet_layout_box = "PERIMETER"
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_single_magnet_centered()
+
+    def case_r02(self):
+        p = self.props
+        p.shape = "BOX"
+        p.magnets_count = 1
+        p.magnet_layout_box = "CORNERS"
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_single_magnet_centered()
+
+    def case_r03(self):
+        p = self.props
+        p.shape = "CYL"
+        p.magnets_count = 1
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_single_magnet_centered()
+
     # ---- Runner -----------------------------------------------------------
     def run(self, selected_case_ids=None, stop_on_fail=False):
         selected = set(selected_case_ids or [])
@@ -732,7 +774,7 @@ def _normalize_case_ids(raw_case_args):
         token = raw.strip().upper()
         if not token:
             continue
-        if not token.startswith("T"):
+        if not token.startswith(("T", "R")):
             token = f"T{token}"
         normalized.append(token)
     return normalized

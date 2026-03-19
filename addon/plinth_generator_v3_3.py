@@ -38,6 +38,7 @@ DEFAULT_VOXEL_MM = 0.25
 DEFAULT_DEGENERATE_FACE_AREA_MM2 = 1e-5
 MM_PER_INCH = 25.4
 MAX_PERIMETER_DETAIL_INSTANCES = 4096
+ROPE_SAMPLES_PER_TWIST = 10
 
 
 # -----------------------------
@@ -356,6 +357,40 @@ def estimate_perimeter_instance_count(
     return max(int(minimum), int(perimeter / spacing))
 
 
+def rope_perimeter_mm(shape: str, width_mm: float, length_mm: float, diameter_mm: float, rope_dia_mm: float) -> float:
+    r_total = max(0.1, float(rope_dia_mm) * 0.5)
+    base_offset = r_total * 0.5
+    if shape == "BOX":
+        return 2.0 * ((max(0.0, float(width_mm)) + (2.0 * base_offset)) + (max(0.0, float(length_mm)) + (2.0 * base_offset)))
+    rr = max(0.001, (max(0.0, float(diameter_mm)) * 0.5) + base_offset)
+    return 2.0 * math.pi * rr
+
+
+def rope_sample_count(perimeter_mm: float, rope_pitch_mm: float) -> int:
+    pitch = max(0.5, float(rope_pitch_mm))
+    twists = max(1.0, float(perimeter_mm) / pitch)
+    return clamp_instance_count(max(24, int(twists * ROPE_SAMPLES_PER_TWIST)), minimum=24)
+
+
+def rect_perimeter_point_and_normal(hx: float, hy: float, d: float):
+    hx = max(0.001, float(hx))
+    hy = max(0.001, float(hy))
+    per = 4.0 * (hx + hy)
+    d = d % per
+    segx = 2.0 * hx
+    segy = 2.0 * hy
+    if d < segx:
+        return (hx - d, -hy), Vector((0.0, -1.0, 0.0))
+    if d < segx + segy:
+        d2 = d - segx
+        return (-hx, -hy + d2), Vector((-1.0, 0.0, 0.0))
+    if d < segx + segy + segx:
+        d2 = d - (segx + segy)
+        return (-hx + d2, hy), Vector((0.0, 1.0, 0.0))
+    d2 = d - (segx + segy + segx)
+    return (hx, hy - d2), Vector((1.0, 0.0, 0.0))
+
+
 def rect_perimeter_points_from_extents(hx: float, hy: float, count: int):
     count = clamp_instance_count(count, minimum=0)
     if count <= 0:
@@ -409,6 +444,34 @@ def bm_add_cylinder_z(bm: bmesh.types.BMesh, radius: float, height: float, cente
     )
     verts = list(res["verts"])
     bmesh.ops.translate(bm, verts=verts, vec=Vector(center))
+
+
+def bm_add_cylinder_between_points(bm: bmesh.types.BMesh, radius: float, p0, p1, segments: int):
+    p0v = Vector(p0)
+    p1v = Vector(p1)
+    d = p1v - p0v
+    length = d.length
+    if length <= 1e-6:
+        return
+
+    res = bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        cap_tris=False,
+        segments=max(10, int(segments)),
+        radius1=max(0.001, float(radius)),
+        radius2=max(0.001, float(radius)),
+        depth=length,
+    )
+    verts = list(res["verts"])
+
+    z_axis = Vector((0.0, 0.0, 1.0))
+    dir_n = d.normalized()
+    if (dir_n - z_axis).length > 1e-9:
+        rot = z_axis.rotation_difference(dir_n).to_matrix()
+        bmesh.ops.rotate(bm, verts=verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
+
+    bmesh.ops.translate(bm, verts=verts, vec=((p0v + p1v) * 0.5))
 
 
 def bm_add_sphere(bm: bmesh.types.BMesh, radius: float, center, u_segments: int = 24, v_segments: int = 12, scale_xyz=(1.0, 1.0, 1.0)):
@@ -585,28 +648,57 @@ def make_rope_band_mesh(
     mesh_name: str,
 ) -> bpy.types.Mesh:
     bm = bmesh.new()
-    r = max(0.1, rope_dia_mm * 0.5)
-    pitch = max(0.5, float(rope_pitch_mm))
-    zc = (height_mm - r) if at_top else r
+    r_total = max(0.1, rope_dia_mm * 0.5)
+    strand_r = max(0.05, r_total * 0.58)
+    strand_amp = max(0.01, r_total * 0.42)
+    base_offset = r_total * 0.5
+    zc = (height_mm - r_total) if at_top else r_total
+
+    per = rope_perimeter_mm(shape, width_mm, length_mm, diameter_mm, rope_dia_mm)
+    n = rope_sample_count(per, rope_pitch_mm)
+    desired_twists = max(1.0, per / max(0.5, float(rope_pitch_mm)))
+    actual_twists = max(1, int(round(desired_twists)))
+    twist_factor = 2.0 * math.pi * float(actual_twists)
+
+    base_points = []
+    base_normals = []
+
     if shape == "BOX":
-        per = 2.0 * (width_mm + length_mm)
-        n = clamp_instance_count(max(8, int(per / pitch)), minimum=8)
-        pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (r * 0.5), (length_mm * 0.5) + (r * 0.5), n)
-        for i, (x, y) in enumerate(pts):
-            dz = math.sin((2.0 * math.pi * i * 2.0) / n) * (r * 0.35)
-            bm_add_sphere(bm, r * 0.75, (x, y, zc + dz), u_segments=12, v_segments=8)
-            bm_add_sphere(bm, r * 0.75, (x, y, zc - dz), u_segments=12, v_segments=8)
+        hx = (width_mm * 0.5) + base_offset
+        hy = (length_mm * 0.5) + base_offset
+        step = per / n
+        start = step * 0.5
+        for i in range(n):
+            (x, y), nrm = rect_perimeter_point_and_normal(hx, hy, start + (i * step))
+            base_points.append(Vector((x, y, zc)))
+            base_normals.append(nrm)
     else:
-        per = math.pi * diameter_mm
-        n = clamp_instance_count(max(10, int(per / pitch)), minimum=10)
-        rr = (diameter_mm * 0.5) + (r * 0.5)
+        rr = (diameter_mm * 0.5) + base_offset
         for i in range(n):
             a = (2.0 * math.pi * i) / n
-            x = rr * math.cos(a)
-            y = rr * math.sin(a)
-            dz = math.sin((2.0 * math.pi * i * 2.0) / n) * (r * 0.35)
-            bm_add_sphere(bm, r * 0.75, (x, y, zc + dz), u_segments=12, v_segments=8)
-            bm_add_sphere(bm, r * 0.75, (x, y, zc - dz), u_segments=12, v_segments=8)
+            nx = math.cos(a)
+            ny = math.sin(a)
+            base_points.append(Vector((rr * nx, rr * ny, zc)))
+            base_normals.append(Vector((nx, ny, 0.0)))
+
+    up = Vector((0.0, 0.0, 1.0))
+    strand0 = []
+    strand1 = []
+
+    for i, base in enumerate(base_points):
+        t = i / n
+        phase = twist_factor * t
+        nrm = base_normals[i]
+        offset0 = (nrm * (strand_amp * math.cos(phase))) + (up * (strand_amp * math.sin(phase)))
+        offset1 = (nrm * (strand_amp * math.cos(phase + math.pi))) + (up * (strand_amp * math.sin(phase + math.pi)))
+        strand0.append(base + offset0)
+        strand1.append(base + offset1)
+
+    cyl_segments = 12
+    for i in range(n):
+        i2 = (i + 1) % n
+        bm_add_cylinder_between_points(bm, strand_r, strand0[i], strand0[i2], segments=cyl_segments)
+        bm_add_cylinder_between_points(bm, strand_r, strand1[i], strand1[i2], segments=cyl_segments)
     return bm_to_mesh(bm, mesh_name)
 
 
@@ -1076,6 +1168,15 @@ def add_boolean_union_modifier(target_obj: bpy.types.Object, union_obj: bpy.type
     mod.solver = "EXACT"
     mod.object = union_obj
     return mod
+
+
+def move_modifier_to_end(obj: bpy.types.Object, modifier_name: str):
+    idx = obj.modifiers.find(modifier_name)
+    if idx < 0:
+        return
+    last = len(obj.modifiers) - 1
+    if idx != last:
+        obj.modifiers.move(idx, last)
 
 
 def add_helper_boolean_object(
@@ -1882,15 +1983,14 @@ def preflight_validate(props: PlinthGenProps):
             )
 
     if props.rope_enabled:
-        rope_min = 8 if props.shape == "BOX" else 10
-        rope_n = estimate_perimeter_instance_count(
+        rope_per = rope_perimeter_mm(
             shape=props.shape,
             width_mm=props.width_mm,
             length_mm=props.length_mm,
             diameter_mm=props.diameter_mm,
-            spacing_mm=props.rope_pitch_mm,
-            minimum=rope_min,
+            rope_dia_mm=props.rope_dia_mm,
         )
+        rope_n = rope_sample_count(rope_per, props.rope_pitch_mm)
         rope_total = rope_n * 2
         if rope_total > MAX_PERIMETER_DETAIL_INSTANCES:
             errors.append(
@@ -2008,6 +2108,7 @@ def build_plinth(context, props: PlinthGenProps):
     # MAGNETS
     magnet_pts = []
     drain_pts = []
+    post_remesh_functional_cutters = []
 
     if props.magnets_count > 0:
         cutter_dia = max(0.1, props.magnet_dia_mm + props.dia_tol_mm)
@@ -2045,6 +2146,7 @@ def build_plinth(context, props: PlinthGenProps):
             cutters_obj.hide_set(not props.show_cutters)
             cutters_obj.hide_render = True
             add_boolean_modifier(main_obj, cutters_obj, "MagnetCut")
+            post_remesh_functional_cutters.append(cutters_obj)
         else:
             # No safe depth remains after clamp; skip magnet cutters.
             magnet_pts = []
@@ -2089,6 +2191,7 @@ def build_plinth(context, props: PlinthGenProps):
         drains_obj.hide_set(not props.show_cutters)
         drains_obj.hide_render = True
         add_boolean_modifier(main_obj, drains_obj, "DrainCut")
+        post_remesh_functional_cutters.append(drains_obj)
 
     # DRAINS AT MAGNET CENTERS (sealed hollow bottoms)
     if (
@@ -2115,6 +2218,7 @@ def build_plinth(context, props: PlinthGenProps):
         center_obj.hide_set(not props.show_cutters)
         center_obj.hide_render = True
         add_boolean_modifier(main_obj, center_obj, "DrainAtMagnetCenters")
+        post_remesh_functional_cutters.append(center_obj)
 
     # BASE TRIM (decorative half-round at base)
     if props.base_trim_enabled and props.base_trim_radius_mm > 0.0:
@@ -2368,6 +2472,10 @@ def build_plinth(context, props: PlinthGenProps):
         obj_feet = add_helper_boolean_object(coll, mesh_feet, "Plinth_Feet_v3_3", props.show_cutters)
         add_boolean_union_modifier(main_obj, obj_feet, "FeetUnion")
 
+    # Keep functional holes as late-stage cuts so additive decorations do not refill them.
+    for mod_name in ("DrainCut", "DrainAtMagnetCenters", "MagnetCut"):
+        move_modifier_to_end(main_obj, mod_name)
+
     # PREVIEW (export this)
     if props.preview_cuts_duplicate:
         preview = main_obj.copy()
@@ -2395,6 +2503,13 @@ def build_plinth(context, props: PlinthGenProps):
         if props.manifold_guarantee:
             remesh_used = manifold_guarantee_on_preview(preview, voxel_size_mm=props.voxel_size_mm)
             ground_mesh_to_z0(preview.data)
+            if remesh_used and post_remesh_functional_cutters:
+                # Restore crisp functional holes after voxel remesh.
+                for idx, cutter_obj in enumerate(post_remesh_functional_cutters):
+                    add_boolean_modifier(preview, cutter_obj, f"PostRemeshFunctionalCut_{idx + 1}")
+                apply_all_modifiers(preview)
+                bm_cleanup_and_normals(preview.data, merge_dist_mm=MERGE_DIST_MM)
+                ground_mesh_to_z0(preview.data)
 
         if props.health_check_enabled:
             health = evaluate_preview_mesh_health(

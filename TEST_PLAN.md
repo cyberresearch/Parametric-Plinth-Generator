@@ -4,8 +4,8 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 
 ## How To Use
 1. Open Blender with a new scene.
-2. Enable the addon from `addon/plinth_generator_v3_3.py`.
-3. Open `View3D > Sidebar > Plinth v3.3`.
+2. Enable the addon from `addon/plinth_generator_v3_4.py`.
+3. Open `View3D > Sidebar > Plinth v3.4`.
 4. For each test case, apply the listed settings and run `Create` (or `Force Rebuild`).
 5. Record `PASS` or `FAIL` in the `Result` column and add notes if behavior differs.
 
@@ -44,9 +44,19 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 | T24 | Inch input drives mm (CYL) | `shape=CYL`, `Input Units=IN`, set `diameter_in=5.0`, `cyl_height_in=2.5` | Live labels show `127.000 mm` and `63.500 mm`; built plinth matches those values. |  |  |
 | T25 | mm input back-sync to inches | `Input Units=MM`, set `width_mm=50.8`, `length_mm=76.2`, switch `Input Units=IN` | Inch fields display `2.0` and `3.0` (or rounded equivalents). |  |  |
 | T26 | Unit mode does not break manifold/health path | `Input Units=IN`, enter valid inch dimensions, enable `preview duplicate`, `manifold_guarantee`, `health_check`, build | Build succeeds; manifold/health behavior is unchanged, and health report populates normally. |  |  |
+| T27 | Sloped hollow roof thickness (BOX) | `shape=BOX`, `width=100`, `length=80`, `height=50`, `hollow=ON`, `sealed=ON`, `wall_thickness=5`, `top_thickness=10`, `bottom_thickness=3`, `slope_enabled=ON`, `slope_delta=5`, `slope_axis=X`, build | Hollow roof thickness remains `10mm` on both low and high sides of the slope. |  |  |
+| T28 | Sloped hollow roof thickness (CYL) | `shape=CYL`, `diameter=100`, `height=50`, `hollow=ON`, `sealed=ON`, `wall_thickness=5`, `top_thickness=10`, `bottom_thickness=3`, `slope_enabled=ON`, `slope_delta=5`, `slope_axis=X`, build | Hollow roof thickness remains `10mm` on both low and high sides of the slope. |  |  |
+| T29 | Export blocked after failed health | Use the forced-fail setup from T20, then try `Export STL` | Export button is unavailable while preview is blocked, and no STL is written. |  |  |
+| T30 | BOX recessed panels default health | `shape=BOX`, `panels_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
+| T31 | BOX nameplate default health | `shape=BOX`, `nameplate_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
+| T32 | BOX dentil default health | `shape=BOX`, `dentil_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
+| T33 | BOX dentil depth honored | Generate a BOX dentil course with `dentil_w=2`, `dentil_d=10`, `dentil_h=4` | Dentils project `10mm` from the box sides rather than collapsing to a shallower depth. |  |  |
+| T34 | BOX rope default health | `shape=BOX`, `rope_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
+| T35 | CYL rope default health | `shape=CYL`, `rope_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
+| T36 | CYL bead border default health | `shape=CYL`, `beads_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. |  |  |
 
 ## Signoff
 
 | Date | Tester | Blender Version | Addon File | Summary |
 |---|---|---|---|---|
-|  |  | 5.0 | `addon/plinth_generator_v3_3.py` |  |
+|  |  | 5.0 | `addon/plinth_generator_v3_4.py` |  |

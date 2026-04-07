@@ -1,9 +1,9 @@
 bl_info = {
-    "name": "Parametric Plinth Generator v3.3",
+    "name": "Parametric Plinth Generator v3.4",
     "author": "cyberresearch",
-    "version": (3, 3, 0),
+    "version": (3, 4, 0),
     "blender": (5, 0, 0),
-    "location": "View3D > Sidebar > Plinth v3.3",
+    "location": "View3D > Sidebar > Plinth v3.4",
     "description": "Parametric plinth with slope, hollow (sealed/open), decorative half-round base trim, magnets, drains, and optional watertight remesh fallback.",
     "category": "Add Mesh",
 }
@@ -16,16 +16,37 @@ from mathutils import Matrix, Vector
 # -----------------------------
 # Global names / constants
 # -----------------------------
-PROP_NAME = "plinthgen_props_v3_3"
+PROP_NAME = "plinthgen_props_v3_4"
 
-COLL_NAME = "PlinthGen_v3_3"
-OBJ_MAIN = "Plinth_Main_v3_3"
-OBJ_CUTTERS = "Plinth_MagnetCutters_v3_3"
-OBJ_HOLLOW = "Plinth_HollowCutter_v3_3"
-OBJ_DRAINS = "Plinth_DrainCutters_v3_3"
-OBJ_DRAINS_MAGNET_CENTER = "Plinth_MagnetCenterDrainCutters_v3_3"
-OBJ_BASE_TRIM = "Plinth_BaseTrim_v3_3"
+COLL_NAME = "PlinthGen_v3_4"
+OBJ_MAIN = "Plinth_Main_v3_4"
+OBJ_CUTTERS = "Plinth_MagnetCutters_v3_4"
+OBJ_HOLLOW = "Plinth_HollowCutter_v3_4"
+OBJ_DRAINS = "Plinth_DrainCutters_v3_4"
+OBJ_DRAINS_MAGNET_CENTER = "Plinth_MagnetCenterDrainCutters_v3_4"
+OBJ_BASE_TRIM = "Plinth_BaseTrim_v3_4"
 OBJ_PREVIEW = f"{OBJ_MAIN}_PREVIEW"
+LEGACY_COLL_NAMES = ("PlinthGen_v3_3",)
+LEGACY_TOP_LEVEL_OBJECT_NAMES = (
+    "Plinth_Main_v3_3",
+    "Plinth_MagnetCutters_v3_3",
+    "Plinth_HollowCutter_v3_3",
+    "Plinth_DrainCutters_v3_3",
+    "Plinth_MagnetCenterDrainCutters_v3_3",
+    "Plinth_BaseTrim_v3_3",
+    "Plinth_Main_v3_3_PREVIEW",
+)
+KNOWN_COLL_NAMES = (COLL_NAME, *LEGACY_COLL_NAMES)
+KNOWN_TOP_LEVEL_OBJECT_NAMES = (
+    OBJ_MAIN,
+    OBJ_CUTTERS,
+    OBJ_HOLLOW,
+    OBJ_DRAINS,
+    OBJ_DRAINS_MAGNET_CENTER,
+    OBJ_BASE_TRIM,
+    OBJ_PREVIEW,
+    *LEGACY_TOP_LEVEL_OBJECT_NAMES,
+)
 
 OVERSHOOT_MM = 1.0            # cutters extend below the base for reliable boolean subtraction
 MAGNET_CLAMP_MARGIN_MM = 0.5  # keep at least this much material before cavity (sealed bottom)
@@ -69,33 +90,35 @@ def get_or_create_collection(name: str):
 
 def delete_plinthgen_objects_only():
     """Delete only objects belonging to the PlinthGen collection (never touches user geometry)."""
-    coll = bpy.data.collections.get(COLL_NAME)
-    if coll:
-        for obj in list(coll.objects):
-            bpy.data.objects.remove(obj, do_unlink=True)
+    for coll_name in KNOWN_COLL_NAMES:
+        coll = bpy.data.collections.get(coll_name)
+        if coll:
+            for obj in list(coll.objects):
+                bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def clear_plinthgen_artifacts():
     """Remove our known objects and our collection (Blender 5 safe)."""
-    for name in (OBJ_MAIN, OBJ_CUTTERS, OBJ_HOLLOW, OBJ_DRAINS, OBJ_DRAINS_MAGNET_CENTER, OBJ_BASE_TRIM, OBJ_PREVIEW):
+    for name in KNOWN_TOP_LEVEL_OBJECT_NAMES:
         obj = bpy.data.objects.get(name)
         if obj:
             bpy.data.objects.remove(obj, do_unlink=True)
 
-    coll = bpy.data.collections.get(COLL_NAME)
-    if coll:
-        # remove objects still in collection
-        for obj in list(coll.objects):
-            bpy.data.objects.remove(obj, do_unlink=True)
+    for coll_name in KNOWN_COLL_NAMES:
+        coll = bpy.data.collections.get(coll_name)
+        if coll:
+            # remove objects still in collection
+            for obj in list(coll.objects):
+                bpy.data.objects.remove(obj, do_unlink=True)
 
-        # unlink from current scene
-        scene_children = bpy.context.scene.collection.children
-        for child in list(scene_children):
-            if child == coll:
-                scene_children.unlink(coll)
-                break
+            # unlink from current scene
+            scene_children = bpy.context.scene.collection.children
+            for child in list(scene_children):
+                if child == coll:
+                    scene_children.unlink(coll)
+                    break
 
-        bpy.data.collections.remove(coll)
+            bpy.data.collections.remove(coll)
 
     purge_orphans()
 
@@ -340,6 +363,11 @@ def translate_mesh(mesh: bpy.types.Mesh, vec: Vector):
     mesh.update()
 
 
+def rot_z_align_local_y_to_vector(vec: Vector) -> float:
+    """Rotation that points a local +Y axis along *vec* in the XY plane."""
+    return math.atan2(-vec.x, vec.y)
+
+
 def clamp_instance_count(count: int, minimum: int = 0, maximum: int = MAX_PERIMETER_DETAIL_INSTANCES) -> int:
     return max(int(minimum), min(int(count), int(maximum)))
 
@@ -428,7 +456,7 @@ def rect_perimeter_points_from_extents(hx: float, hy: float, count: int):
 def bm_add_box(bm: bmesh.types.BMesh, sx: float, sy: float, sz: float, center, rot_z_rad: float = 0.0):
     res = bmesh.ops.create_cube(bm, size=1.0)
     verts = list(res["verts"])
-    bmesh.ops.scale(bm, verts=verts, vec=Vector((max(0.001, sx) * 0.5, max(0.001, sy) * 0.5, max(0.001, sz) * 0.5)))
+    bmesh.ops.scale(bm, verts=verts, vec=Vector((max(0.001, sx), max(0.001, sy), max(0.001, sz))))
     if abs(rot_z_rad) > 1e-9:
         rot = Matrix.Rotation(rot_z_rad, 3, "Z")
         bmesh.ops.rotate(bm, verts=verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
@@ -449,13 +477,27 @@ def bm_add_cylinder_z(bm: bmesh.types.BMesh, radius: float, height: float, cente
     bmesh.ops.translate(bm, verts=verts, vec=Vector(center))
 
 
-def bm_add_cylinder_between_points(bm: bmesh.types.BMesh, radius: float, p0, p1, segments: int):
+def bm_add_cylinder_between_points(
+    bm: bmesh.types.BMesh,
+    radius: float,
+    p0,
+    p1,
+    segments: int,
+    end_extend_mm: float = 0.0,
+):
     p0v = Vector(p0)
     p1v = Vector(p1)
     d = p1v - p0v
     length = d.length
     if length <= 1e-6:
         return
+    dir_n = d.normalized()
+    extend = max(0.0, float(end_extend_mm))
+    if extend > 0.0:
+        p0v -= dir_n * extend
+        p1v += dir_n * extend
+        d = p1v - p0v
+        length = d.length
 
     res = bmesh.ops.create_cone(
         bm,
@@ -469,12 +511,77 @@ def bm_add_cylinder_between_points(bm: bmesh.types.BMesh, radius: float, p0, p1,
     verts = list(res["verts"])
 
     z_axis = Vector((0.0, 0.0, 1.0))
-    dir_n = d.normalized()
     if (dir_n - z_axis).length > 1e-9:
         rot = z_axis.rotation_difference(dir_n).to_matrix()
         bmesh.ops.rotate(bm, verts=verts, cent=Vector((0.0, 0.0, 0.0)), matrix=rot)
 
     bmesh.ops.translate(bm, verts=verts, vec=((p0v + p1v) * 0.5))
+
+
+def bm_add_closed_tube(
+    bm: bmesh.types.BMesh,
+    points,
+    guide_normals,
+    radius: float,
+    segments: int,
+):
+    count = len(points)
+    if count < 3:
+        return
+    seg = max(6, int(segments))
+    rr = max(0.001, float(radius))
+    rings = []
+
+    for i in range(count):
+        curr = Vector(points[i])
+        prev = Vector(points[(i - 1) % count])
+        nxt = Vector(points[(i + 1) % count])
+
+        tangent = nxt - prev
+        if tangent.length <= 1e-6:
+            tangent = nxt - curr
+        if tangent.length <= 1e-6:
+            tangent = curr - prev
+        if tangent.length <= 1e-6:
+            tangent = Vector((1.0, 0.0, 0.0))
+        tangent.normalize()
+
+        guide = Vector(guide_normals[i]) if guide_normals else Vector((0.0, 0.0, 1.0))
+        normal = guide - (tangent * guide.dot(tangent))
+        if normal.length <= 1e-6:
+            fallback = Vector((0.0, 0.0, 1.0))
+            if abs(tangent.dot(fallback)) > 0.95:
+                fallback = Vector((1.0, 0.0, 0.0))
+            normal = fallback - (tangent * fallback.dot(tangent))
+        normal.normalize()
+
+        binormal = tangent.cross(normal)
+        if binormal.length <= 1e-6:
+            fallback = Vector((1.0, 0.0, 0.0))
+            if abs(tangent.dot(fallback)) > 0.95:
+                fallback = Vector((0.0, 1.0, 0.0))
+            binormal = tangent.cross(fallback)
+        binormal.normalize()
+        normal = binormal.cross(tangent)
+        normal.normalize()
+
+        ring = []
+        for j in range(seg):
+            ang = (2.0 * math.pi * j) / seg
+            offset = ((normal * math.cos(ang)) + (binormal * math.sin(ang))) * rr
+            ring.append(bm.verts.new(curr + offset))
+        rings.append(ring)
+
+    for i in range(count):
+        i2 = (i + 1) % count
+        ring_a = rings[i]
+        ring_b = rings[i2]
+        for j in range(seg):
+            j2 = (j + 1) % seg
+            try:
+                bm.faces.new((ring_a[j], ring_a[j2], ring_b[j2], ring_b[j]))
+            except ValueError:
+                pass
 
 
 def bm_add_sphere(bm: bmesh.types.BMesh, radius: float, center, u_segments: int = 24, v_segments: int = 12, scale_xyz=(1.0, 1.0, 1.0)):
@@ -585,10 +692,35 @@ def make_recessed_panels_cutters_mesh(
     if shape == "BOX":
         pw = max(0.5, width_mm - (2.0 * border))
         pl = max(0.5, length_mm - (2.0 * border))
-        bm_add_box(bm, pw, depth * 2.0, panel_h, (0.0, (length_mm * 0.5) - depth, zc))
-        bm_add_box(bm, pw, depth * 2.0, panel_h, (0.0, -(length_mm * 0.5) + depth, zc))
-        bm_add_box(bm, depth * 2.0, pl, panel_h, ((width_mm * 0.5) - depth, 0.0, zc))
-        bm_add_box(bm, depth * 2.0, pl, panel_h, (-(width_mm * 0.5) + depth, 0.0, zc))
+        cutter_depth = depth + OVERSHOOT_MM
+        bm_add_box(
+            bm,
+            pw,
+            cutter_depth,
+            panel_h,
+            (0.0, (length_mm * 0.5) + ((OVERSHOOT_MM - depth) * 0.5), zc),
+        )
+        bm_add_box(
+            bm,
+            pw,
+            cutter_depth,
+            panel_h,
+            (0.0, -(length_mm * 0.5) + ((depth - OVERSHOOT_MM) * 0.5), zc),
+        )
+        bm_add_box(
+            bm,
+            cutter_depth,
+            pl,
+            panel_h,
+            ((width_mm * 0.5) + ((OVERSHOOT_MM - depth) * 0.5), 0.0, zc),
+        )
+        bm_add_box(
+            bm,
+            cutter_depth,
+            pl,
+            panel_h,
+            (-(width_mm * 0.5) + ((depth - OVERSHOOT_MM) * 0.5), 0.0, zc),
+        )
     else:
         n = max(3, int(panel_count_cyl))
         panel_w = max(0.5, (math.pi * diameter_mm * 0.45) / n)
@@ -621,10 +753,15 @@ def make_bead_border_mesh(
     r = max(0.1, bead_size_mm * 0.5)
     spacing = max(0.5, float(bead_spacing_mm))
     rows = max(1, int(bead_rows))
+    cap_clearance = min(max(0.1, r * 0.4), max(0.0, (height_mm * 0.5) - r - 1e-3))
     for row in range(rows):
-        z = (height_mm - r - (row * bead_size_mm * 0.9)) if at_top else (r + (row * bead_size_mm * 0.9))
+        z = (
+            (height_mm - r - cap_clearance - (row * bead_size_mm * 0.9))
+            if at_top
+            else (r + cap_clearance + (row * bead_size_mm * 0.9))
+        )
         # Clamp z so beads never go below 0 or above height
-        z = max(r, min(height_mm - r, z))
+        z = max(r + cap_clearance, min(height_mm - r - cap_clearance, z))
         if shape == "BOX":
             per = 2.0 * (width_mm + length_mm)
             n = clamp_instance_count(max(4, int(per / spacing)), minimum=4)
@@ -656,8 +793,9 @@ def make_rope_band_mesh(
     r_total = max(0.1, rope_dia_mm * 0.5)
     strand_r = max(0.05, r_total * 0.58)
     strand_amp = max(0.01, r_total * 0.42)
-    base_offset = r_total * 0.5
-    zc = (height_mm - r_total) if at_top else r_total
+    base_offset = -max(0.05, strand_r * 0.2)
+    z_clearance = min(max(0.05, strand_r * 0.2), max(0.0, (height_mm * 0.5) - r_total - strand_amp - 1e-3))
+    zc = (height_mm - r_total - z_clearance) if at_top else (r_total + z_clearance)
 
     per = rope_perimeter_mm(shape, width_mm, length_mm, diameter_mm, rope_dia_mm)
     n = rope_sample_count(per, rope_pitch_mm)
@@ -699,11 +837,9 @@ def make_rope_band_mesh(
         strand0.append(base + offset0)
         strand1.append(base + offset1)
 
-    cyl_segments = 12
-    for i in range(n):
-        i2 = (i + 1) % n
-        bm_add_cylinder_between_points(bm, strand_r, strand0[i], strand0[i2], segments=cyl_segments)
-        bm_add_cylinder_between_points(bm, strand_r, strand1[i], strand1[i2], segments=cyl_segments)
+    tube_segments = 12
+    bm_add_closed_tube(bm, strand0, base_normals, strand_r, tube_segments)
+    bm_add_closed_tube(bm, strand1, base_normals, strand_r, tube_segments)
     return bm_to_mesh(bm, mesh_name)
 
 
@@ -729,9 +865,15 @@ def make_dentil_course_mesh(
     if shape == "BOX":
         per = 2.0 * (width_mm + length_mm)
         n = clamp_instance_count(max(4, int(per / max(spacing, w))), minimum=4)
-        pts = rect_perimeter_points_from_extents((width_mm * 0.5) + (d * 0.5), (length_mm * 0.5) + (d * 0.5), n)
-        for (x, y) in pts:
-            bm_add_box(bm, w, w, h, (x, y, zc))
+        step = per / n
+        start = step * 0.5
+        overlap = min(d, OVERSHOOT_MM)
+        total_depth = d + overlap
+        center_offset = (d - overlap) * 0.5
+        for i in range(n):
+            (x, y), nrm = rect_perimeter_point_and_normal(width_mm * 0.5, length_mm * 0.5, start + (i * step))
+            center = (x + (nrm.x * center_offset), y + (nrm.y * center_offset), zc)
+            bm_add_box(bm, w, total_depth, h, center, rot_z_rad=rot_z_align_local_y_to_vector(nrm))
     else:
         per = math.pi * diameter_mm
         n = clamp_instance_count(max(6, int(per / max(spacing, w))), minimum=6)
@@ -832,19 +974,44 @@ def make_nameplate_cutter_mesh(
     ph = max(0.5, float(plate_h_mm))
     pd = max(0.1, float(plate_d_mm))
     zc = max(ph * 0.5, min(height_mm - (ph * 0.5), height_mm * max(0.05, min(0.95, plate_z_ratio))))
+    cutter_depth = pd + OVERSHOOT_MM
 
     if shape == "BOX":
         if plate_side == "POS_X":
-            bm_add_box(bm, pd * 2.0, pw, ph, ((width_mm * 0.5) - pd, 0.0, zc))
+            bm_add_box(
+                bm,
+                cutter_depth,
+                pw,
+                ph,
+                ((width_mm * 0.5) + ((OVERSHOOT_MM - pd) * 0.5), 0.0, zc),
+            )
         elif plate_side == "NEG_X":
-            bm_add_box(bm, pd * 2.0, pw, ph, (-(width_mm * 0.5) + pd, 0.0, zc))
+            bm_add_box(
+                bm,
+                cutter_depth,
+                pw,
+                ph,
+                (-(width_mm * 0.5) + ((pd - OVERSHOOT_MM) * 0.5), 0.0, zc),
+            )
         elif plate_side == "NEG_Y":
-            bm_add_box(bm, pw, pd * 2.0, ph, (0.0, -(length_mm * 0.5) + pd, zc))
+            bm_add_box(
+                bm,
+                pw,
+                cutter_depth,
+                ph,
+                (0.0, -(length_mm * 0.5) + ((pd - OVERSHOOT_MM) * 0.5), zc),
+            )
         else:
-            bm_add_box(bm, pw, pd * 2.0, ph, (0.0, (length_mm * 0.5) - pd, zc))
+            bm_add_box(
+                bm,
+                pw,
+                cutter_depth,
+                ph,
+                (0.0, (length_mm * 0.5) + ((OVERSHOOT_MM - pd) * 0.5), zc),
+            )
     else:
-        rr = max(0.5, (diameter_mm * 0.5) - pd)
-        bm_add_box(bm, pw, pd * 2.0, ph, (0.0, rr, zc))
+        rr = max(0.5, (diameter_mm * 0.5) + ((OVERSHOOT_MM - pd) * 0.5))
+        bm_add_box(bm, pw, cutter_depth, ph, (0.0, rr, zc))
     return bm_to_mesh(bm, mesh_name)
 
 
@@ -952,26 +1119,16 @@ def make_hollow_box_cutter_mesh(
 ) -> bpy.types.Mesh:
     inner_w = max(0.001, width_mm - 2.0 * wall_thickness_mm)
     inner_l = max(0.001, length_mm - 2.0 * wall_thickness_mm)
-
-    target_top = max(0.001, height_mm - top_thickness_mm)
-    mesh = make_box_mesh(inner_w, inner_l, target_top, "Plinth_HollowBoxMesh_v3_3")
+    target_bottom = max(0.0, bottom_thickness_mm) if sealed_bottom else -OVERSHOOT_MM
+    target_top = max(target_bottom + 0.001, height_mm - top_thickness_mm)
+    cavity_height = max(0.001, target_top - target_bottom)
+    mesh = make_box_mesh(inner_w, inner_l, cavity_height, "Plinth_HollowBoxMesh_v3_4")
 
     if slope_enabled and slope_delta_mm > 0.0:
-        slope_top_only(mesh, target_top, slope_delta_mm, slope_axis, high_positive)
+        slope_top_only(mesh, cavity_height, slope_delta_mm, slope_axis, high_positive)
 
-    # Keep cutter top at or below the inner roof height.
-    clamp_mesh_top_z(mesh, target_top)
-
-    # Place vertically: open bottom extends below 0; sealed starts at bottom thickness
-    z_min = min(v.co.z for v in mesh.vertices)
-    if sealed_bottom:
-        target_bottom = max(0.0, bottom_thickness_mm)
-    else:
-        target_bottom = -OVERSHOOT_MM
-    dz = target_bottom - z_min
-    for v in mesh.vertices:
-        v.co.z += dz
-    mesh.update()
+    if abs(target_bottom) > 1e-9:
+        translate_mesh(mesh, Vector((0.0, 0.0, target_bottom)))
     return mesh
 
 
@@ -989,24 +1146,17 @@ def make_hollow_cyl_cutter_mesh(
     segments: int,
 ) -> bpy.types.Mesh:
     inner_d = max(0.001, diameter_mm - 2.0 * wall_thickness_mm)
-    target_top = max(0.001, height_mm - top_thickness_mm)
+    target_bottom = max(0.0, bottom_thickness_mm) if sealed_bottom else -OVERSHOOT_MM
+    target_top = max(target_bottom + 0.001, height_mm - top_thickness_mm)
+    cavity_height = max(0.001, target_top - target_bottom)
 
-    mesh = make_cylinder_mesh(inner_d, target_top, segments, "Plinth_HollowCylMesh_v3_3")
+    mesh = make_cylinder_mesh(inner_d, cavity_height, segments, "Plinth_HollowCylMesh_v3_4")
 
     if slope_enabled and slope_delta_mm > 0.0:
-        slope_top_only(mesh, target_top, slope_delta_mm, slope_axis, high_positive)
+        slope_top_only(mesh, cavity_height, slope_delta_mm, slope_axis, high_positive)
 
-    clamp_mesh_top_z(mesh, target_top)
-
-    z_min = min(v.co.z for v in mesh.vertices)
-    if sealed_bottom:
-        target_bottom = max(0.0, bottom_thickness_mm)
-    else:
-        target_bottom = -OVERSHOOT_MM
-    dz = target_bottom - z_min
-    for v in mesh.vertices:
-        v.co.z += dz
-    mesh.update()
+    if abs(target_bottom) > 1e-9:
+        translate_mesh(mesh, Vector((0.0, 0.0, target_bottom)))
     return mesh
 
 
@@ -1173,10 +1323,10 @@ def add_boolean_modifier(target_obj: bpy.types.Object, cutter_obj: bpy.types.Obj
     return mod
 
 
-def add_boolean_union_modifier(target_obj: bpy.types.Object, union_obj: bpy.types.Object, name: str):
+def add_boolean_union_modifier(target_obj: bpy.types.Object, union_obj: bpy.types.Object, name: str, solver: str = "EXACT"):
     mod = target_obj.modifiers.new(name=name, type="BOOLEAN")
     mod.operation = "UNION"
-    mod.solver = "EXACT"
+    mod.solver = solver
     mod.object = union_obj
     return mod
 
@@ -1288,6 +1438,7 @@ def bm_cleanup_and_normals(mesh: bpy.types.Mesh, merge_dist_mm: float = MERGE_DI
     bm.from_mesh(mesh)
 
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=max(merge_dist_mm, 1e-9))
+    bmesh.ops.dissolve_degenerate(bm, dist=max(merge_dist_mm * 100.0, 1e-7), edges=bm.edges)
 
     loose_edges = [e for e in bm.edges if len(e.link_faces) == 0]
     if loose_edges:
@@ -1356,16 +1507,24 @@ def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float) -> bool:
     return True
 
 
-def manifold_guarantee_on_preview(preview_obj: bpy.types.Object, voxel_size_mm: float) -> bool:
+def manifold_guarantee_on_preview(
+    preview_obj: bpy.types.Object,
+    voxel_size_mm: float,
+    degenerate_area_mm2: float = DEFAULT_DEGENERATE_FACE_AREA_MM2,
+) -> bool:
     """Run cleanup and optional voxel remesh. Returns True if remesh was successfully applied."""
     remeshed = False
     bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
-    if not mesh_is_watertight(preview_obj.data):
+    health = evaluate_preview_mesh_health(
+        preview_obj.data,
+        degenerate_area_mm2=degenerate_area_mm2,
+    )
+    if not health["passed"]:
         if apply_voxel_remesh(preview_obj, voxel_size_mm=voxel_size_mm):
             remeshed = True
             bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
         else:
-            print("[PlinthGen] WARNING: manifold guarantee voxel remesh failed; mesh may not be watertight.")
+            print("[PlinthGen] WARNING: manifold guarantee voxel remesh failed; preview health issues remain.")
     return remeshed
 
 
@@ -1502,6 +1661,14 @@ def store_health_report(props: "PlinthGenProps", report, remesh_used: bool):
         if report["inverted_normals"]:
             issues.append("inverted normals")
         props.health_last_summary = "FAIL: " + ", ".join(issues) if issues else "FAIL"
+
+
+def preview_export_blocked(props: "PlinthGenProps") -> bool:
+    return bool(
+        props.health_block_preview_on_fail
+        and props.health_last_ran
+        and not props.health_last_pass
+    )
 
 
 # -----------------------------
@@ -2110,12 +2277,12 @@ def build_plinth(context, props: PlinthGenProps):
 
     # MAIN
     if props.shape == "BOX":
-        mesh_main = make_box_mesh(props.width_mm, props.length_mm, props.height_mm, "Plinth_MainBoxMesh_v3_3")
+        mesh_main = make_box_mesh(props.width_mm, props.length_mm, props.height_mm, "Plinth_MainBoxMesh_v3_4")
         if slope_on:
             slope_top_only(mesh_main, props.height_mm, props.slope_delta_mm, props.slope_axis, high_positive)
         ground_mesh_to_z0(mesh_main)
     else:
-        mesh_main = make_cylinder_mesh(props.diameter_mm, props.cyl_height_mm, props.cyl_segments, "Plinth_MainCylMesh_v3_3")
+        mesh_main = make_cylinder_mesh(props.diameter_mm, props.cyl_height_mm, props.cyl_segments, "Plinth_MainCylMesh_v3_4")
         if slope_on:
             slope_top_only(mesh_main, props.cyl_height_mm, props.slope_delta_mm, props.slope_axis, high_positive)
         ground_mesh_to_z0(mesh_main)
@@ -2192,7 +2359,7 @@ def build_plinth(context, props: PlinthGenProps):
                 radius_mm=cutter_radius,
                 depth_mm=actual_depth,
                 positions_xy=magnet_pts,
-                mesh_name="Plinth_MagnetCuttersMesh_v3_3",
+                mesh_name="Plinth_MagnetCuttersMesh_v3_4",
                 segments=48,
                 overshoot_mm=OVERSHOOT_MM
             )
@@ -2243,7 +2410,7 @@ def build_plinth(context, props: PlinthGenProps):
                 radius_mm=drain_radius,
                 depth_mm=drain_depth,
                 positions_xy=drain_pts,
-                mesh_name="Plinth_DrainCuttersMesh_v3_3",
+                mesh_name="Plinth_DrainCuttersMesh_v3_4",
                 segments=48,
                 overshoot_mm=drain_overshoot
             )
@@ -2270,7 +2437,7 @@ def build_plinth(context, props: PlinthGenProps):
             radius_mm=center_radius,
             depth_mm=center_depth,
             positions_xy=center_pts,
-            mesh_name="Plinth_MagnetCenterDrainCuttersMesh_v3_3",
+            mesh_name="Plinth_MagnetCenterDrainCuttersMesh_v3_4",
             segments=48,
             overshoot_mm=0.0,
         )
@@ -2290,7 +2457,7 @@ def build_plinth(context, props: PlinthGenProps):
                 length_mm=props.length_mm,
                 radius_mm=trim_radius,
                 segments=props.base_trim_segments,
-                mesh_name="Plinth_BaseTrimBoxMesh_v3_3",
+                mesh_name="Plinth_BaseTrimBoxMesh_v3_4",
             )
         else:
             trim_mesh = make_cyl_base_half_round_mesh(
@@ -2298,7 +2465,7 @@ def build_plinth(context, props: PlinthGenProps):
                 minor_radius_mm=trim_radius,
                 major_segments=max(24, int(props.cyl_segments)),
                 minor_segments=props.base_trim_segments,
-                mesh_name="Plinth_BaseTrimCylMesh_v3_3",
+                mesh_name="Plinth_BaseTrimCylMesh_v3_4",
             )
 
         trim_obj = bpy.data.objects.new(OBJ_BASE_TRIM, trim_mesh)
@@ -2322,7 +2489,7 @@ def build_plinth(context, props: PlinthGenProps):
                     props.length_mm,
                     band_d,
                     props.profile_band_segments,
-                    "Plinth_ProfileBandUnionBoxMesh_v3_3",
+                    "Plinth_ProfileBandUnionBoxMesh_v3_4",
                 )
             else:
                 mesh_union = make_cyl_base_half_round_mesh(
@@ -2330,10 +2497,10 @@ def build_plinth(context, props: PlinthGenProps):
                     band_d,
                     max(24, int(props.cyl_segments)),
                     props.profile_band_segments,
-                    "Plinth_ProfileBandUnionCylMesh_v3_3",
+                    "Plinth_ProfileBandUnionCylMesh_v3_4",
                 )
             translate_mesh(mesh_union, Vector((0.0, 0.0, zc - band_d)))
-            obj_union = add_helper_boolean_object(coll, mesh_union, "Plinth_ProfileBandUnion_v3_3", props.show_cutters)
+            obj_union = add_helper_boolean_object(coll, mesh_union, "Plinth_ProfileBandUnion_v3_4", props.show_cutters)
             add_boolean_union_modifier(main_obj, obj_union, "ProfileBandUnion")
 
         if props.profile_band_style in {"COVE", "OGEE"}:
@@ -2344,7 +2511,7 @@ def build_plinth(context, props: PlinthGenProps):
                     props.length_mm,
                     band_d,
                     props.profile_band_segments,
-                    "Plinth_ProfileBandCutBoxMesh_v3_3",
+                    "Plinth_ProfileBandCutBoxMesh_v3_4",
                 )
             else:
                 mesh_cut = make_cyl_base_half_round_mesh(
@@ -2352,10 +2519,10 @@ def build_plinth(context, props: PlinthGenProps):
                     band_d,
                     max(24, int(props.cyl_segments)),
                     props.profile_band_segments,
-                    "Plinth_ProfileBandCutCylMesh_v3_3",
+                    "Plinth_ProfileBandCutCylMesh_v3_4",
                 )
             translate_mesh(mesh_cut, Vector((0.0, 0.0, zc - band_d)))
-            obj_cut = add_helper_boolean_object(coll, mesh_cut, "Plinth_ProfileBandCut_v3_3", props.show_cutters)
+            obj_cut = add_helper_boolean_object(coll, mesh_cut, "Plinth_ProfileBandCut_v3_4", props.show_cutters)
             add_boolean_modifier(main_obj, obj_cut, "ProfileBandCut")
 
     # STEPPED LAYERS
@@ -2371,9 +2538,9 @@ def build_plinth(context, props: PlinthGenProps):
             step_offset_mm=props.steps_offset_mm,
             at_top=(props.steps_position == "TOP"),
             segments=max(24, int(props.cyl_segments)),
-            mesh_name="Plinth_SteppedLayersMesh_v3_3",
+            mesh_name="Plinth_SteppedLayersMesh_v3_4",
         )
-        obj_steps = add_helper_boolean_object(coll, mesh_steps, "Plinth_SteppedLayers_v3_3", props.show_cutters)
+        obj_steps = add_helper_boolean_object(coll, mesh_steps, "Plinth_SteppedLayers_v3_4", props.show_cutters)
         add_boolean_union_modifier(main_obj, obj_steps, "SteppedLayersUnion")
 
     # VERTICAL FLUTING
@@ -2389,9 +2556,9 @@ def build_plinth(context, props: PlinthGenProps):
             flute_depth_mm=props.fluting_depth_mm,
             z_margin_mm=props.fluting_z_margin_mm,
             segments=max(16, int(props.cyl_segments)),
-            mesh_name="Plinth_FlutingCuttersMesh_v3_3",
+            mesh_name="Plinth_FlutingCuttersMesh_v3_4",
         )
-        obj_flutes = add_helper_boolean_object(coll, mesh_flutes, "Plinth_FlutingCutters_v3_3", props.show_cutters)
+        obj_flutes = add_helper_boolean_object(coll, mesh_flutes, "Plinth_FlutingCutters_v3_4", props.show_cutters)
         add_boolean_modifier(main_obj, obj_flutes, "FlutingCut")
 
     # RECESSED SIDE PANELS
@@ -2407,9 +2574,9 @@ def build_plinth(context, props: PlinthGenProps):
             panel_height_ratio=props.panel_height_ratio,
             panel_count_cyl=props.panel_count_cyl,
             segments=max(16, int(props.cyl_segments)),
-            mesh_name="Plinth_RecessedPanelsCuttersMesh_v3_3",
+            mesh_name="Plinth_RecessedPanelsCuttersMesh_v3_4",
         )
-        obj_panels = add_helper_boolean_object(coll, mesh_panels, "Plinth_RecessedPanelsCutters_v3_3", props.show_cutters)
+        obj_panels = add_helper_boolean_object(coll, mesh_panels, "Plinth_RecessedPanelsCutters_v3_4", props.show_cutters)
         add_boolean_modifier(main_obj, obj_panels, "PanelCut")
 
     # BEAD BORDER
@@ -2424,10 +2591,10 @@ def build_plinth(context, props: PlinthGenProps):
             bead_spacing_mm=props.bead_spacing_mm,
             bead_rows=props.bead_rows,
             at_top=(props.bead_position == "TOP"),
-            mesh_name="Plinth_BeadBorderMesh_v3_3",
+            mesh_name="Plinth_BeadBorderMesh_v3_4",
         )
-        obj_beads = add_helper_boolean_object(coll, mesh_beads, "Plinth_BeadBorder_v3_3", props.show_cutters)
-        add_boolean_union_modifier(main_obj, obj_beads, "BeadBorderUnion")
+        obj_beads = add_helper_boolean_object(coll, mesh_beads, "Plinth_BeadBorder_v3_4", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_beads, "BeadBorderUnion", solver="MANIFOLD")
 
     # ROPE TWIST BAND
     if props.rope_enabled:
@@ -2440,10 +2607,10 @@ def build_plinth(context, props: PlinthGenProps):
             rope_dia_mm=props.rope_dia_mm,
             rope_pitch_mm=props.rope_pitch_mm,
             at_top=(props.rope_position == "TOP"),
-            mesh_name="Plinth_RopeBandMesh_v3_3",
+            mesh_name="Plinth_RopeBandMesh_v3_4",
         )
-        obj_rope = add_helper_boolean_object(coll, mesh_rope, "Plinth_RopeBand_v3_3", props.show_cutters)
-        add_boolean_union_modifier(main_obj, obj_rope, "RopeBandUnion")
+        obj_rope = add_helper_boolean_object(coll, mesh_rope, "Plinth_RopeBand_v3_4", props.show_cutters)
+        add_boolean_union_modifier(main_obj, obj_rope, "RopeBandUnion", solver="MANIFOLD")
 
     # DENTIL COURSE
     if props.dentil_enabled:
@@ -2458,9 +2625,9 @@ def build_plinth(context, props: PlinthGenProps):
             dentil_h_mm=props.dentil_height_mm,
             dentil_spacing_mm=props.dentil_spacing_mm,
             at_top=(props.dentil_position == "TOP"),
-            mesh_name="Plinth_DentilCourseMesh_v3_3",
+            mesh_name="Plinth_DentilCourseMesh_v3_4",
         )
-        obj_dentil = add_helper_boolean_object(coll, mesh_dentil, "Plinth_DentilCourse_v3_3", props.show_cutters)
+        obj_dentil = add_helper_boolean_object(coll, mesh_dentil, "Plinth_DentilCourse_v3_4", props.show_cutters)
         add_boolean_union_modifier(main_obj, obj_dentil, "DentilUnion")
 
     # SCALLOPED SKIRT
@@ -2474,9 +2641,9 @@ def build_plinth(context, props: PlinthGenProps):
             scallop_radius_mm=props.scallop_radius_mm,
             scallop_depth_mm=props.scallop_depth_mm,
             scallop_z_mm=props.scallop_z_mm,
-            mesh_name="Plinth_ScallopCuttersMesh_v3_3",
+            mesh_name="Plinth_ScallopCuttersMesh_v3_4",
         )
-        obj_scallop = add_helper_boolean_object(coll, mesh_scallop, "Plinth_ScallopCutters_v3_3", props.show_cutters)
+        obj_scallop = add_helper_boolean_object(coll, mesh_scallop, "Plinth_ScallopCutters_v3_4", props.show_cutters)
         add_boolean_modifier(main_obj, obj_scallop, "ScallopCut")
 
     # CORNER BOSSES / MEDALLIONS
@@ -2493,9 +2660,9 @@ def build_plinth(context, props: PlinthGenProps):
             boss_count_cyl=props.boss_count_cyl,
             boss_z_ratio=props.boss_z_ratio,
             height_mm=body_h,
-            mesh_name="Plinth_BossesMesh_v3_3",
+            mesh_name="Plinth_BossesMesh_v3_4",
         )
-        obj_boss = add_helper_boolean_object(coll, mesh_boss, "Plinth_Bosses_v3_3", props.show_cutters)
+        obj_boss = add_helper_boolean_object(coll, mesh_boss, "Plinth_Bosses_v3_4", props.show_cutters)
         add_boolean_union_modifier(main_obj, obj_boss, "BossUnion")
 
     # NAMEPLATE RECESS
@@ -2511,9 +2678,9 @@ def build_plinth(context, props: PlinthGenProps):
             plate_d_mm=props.nameplate_depth_mm,
             plate_side=props.nameplate_side,
             plate_z_ratio=props.nameplate_z_ratio,
-            mesh_name="Plinth_NameplateCutterMesh_v3_3",
+            mesh_name="Plinth_NameplateCutterMesh_v3_4",
         )
-        obj_nameplate = add_helper_boolean_object(coll, mesh_nameplate, "Plinth_NameplateCutter_v3_3", props.show_cutters)
+        obj_nameplate = add_helper_boolean_object(coll, mesh_nameplate, "Plinth_NameplateCutter_v3_4", props.show_cutters)
         add_boolean_modifier(main_obj, obj_nameplate, "NameplateCut")
 
     # FOOT PADS / BUN FEET
@@ -2528,9 +2695,9 @@ def build_plinth(context, props: PlinthGenProps):
             feet_height_mm=props.feet_height_mm,
             feet_inset_mm=props.feet_inset_mm,
             feet_count_cyl=props.feet_count_cyl,
-            mesh_name="Plinth_FeetMesh_v3_3",
+            mesh_name="Plinth_FeetMesh_v3_4",
         )
-        obj_feet = add_helper_boolean_object(coll, mesh_feet, "Plinth_Feet_v3_3", props.show_cutters)
+        obj_feet = add_helper_boolean_object(coll, mesh_feet, "Plinth_Feet_v3_4", props.show_cutters)
         add_boolean_union_modifier(main_obj, obj_feet, "FeetUnion")
 
     # Keep functional holes as late-stage cuts so additive decorations do not refill them.
@@ -2564,7 +2731,11 @@ def build_plinth(context, props: PlinthGenProps):
 
         remesh_used = False
         if props.manifold_guarantee:
-            remesh_used = manifold_guarantee_on_preview(preview, voxel_size_mm=props.voxel_size_mm)
+            remesh_used = manifold_guarantee_on_preview(
+                preview,
+                voxel_size_mm=props.voxel_size_mm,
+                degenerate_area_mm2=props.health_degenerate_area_mm2,
+            )
             ground_mesh_to_z0(preview.data)
             if remesh_used and post_remesh_functional_cutters:
                 # Restore crisp functional holes after voxel remesh.
@@ -2629,8 +2800,8 @@ def _execute_build(op: bpy.types.Operator, context) -> set:
 
 
 class PLINTHGEN_OT_create(bpy.types.Operator):
-    bl_idname = "plinthgen.create_v3_3"
-    bl_label = "Create Plinth v3.3"
+    bl_idname = "plinthgen.create_v3_4"
+    bl_label = "Create Plinth v3.4"
     bl_description = "Generate a new parametric plinth from current settings (removes previous plinth)"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -2643,7 +2814,7 @@ class PLINTHGEN_OT_create(bpy.types.Operator):
 
 
 class PLINTHGEN_OT_rebuild(bpy.types.Operator):
-    bl_idname = "plinthgen.rebuild_v3_3"
+    bl_idname = "plinthgen.rebuild_v3_4"
     bl_label = "Force Rebuild"
     bl_description = "Rebuild the plinth from scratch using current settings"
     bl_options = {"REGISTER", "UNDO"}
@@ -2657,7 +2828,7 @@ class PLINTHGEN_OT_rebuild(bpy.types.Operator):
 
 
 class PLINTHGEN_OT_export_stl(bpy.types.Operator):
-    bl_idname = "plinthgen.export_stl_v3_3"
+    bl_idname = "plinthgen.export_stl_v3_4"
     bl_label = "Export Plinth STL"
     bl_description = "Export the preview mesh as an STL file for 3D printing"
     bl_options = {"REGISTER"}
@@ -2667,7 +2838,13 @@ class PLINTHGEN_OT_export_stl(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return bpy.data.objects.get(OBJ_PREVIEW) is not None
+        preview = bpy.data.objects.get(OBJ_PREVIEW)
+        if preview is None:
+            return False
+        scene = getattr(context, "scene", None)
+        if scene is None or not hasattr(scene, PROP_NAME):
+            return True
+        return not preview_export_blocked(getattr(scene, PROP_NAME))
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -2683,6 +2860,9 @@ class PLINTHGEN_OT_export_stl(bpy.types.Operator):
 
         # Warn if health check failed
         props = getattr(context.scene, PROP_NAME)
+        if preview_export_blocked(props):
+            self.report({'ERROR'}, f"Export blocked by health check: {props.health_last_summary}")
+            return {"CANCELLED"}
         if props.health_last_ran and not props.health_last_pass:
             self.report({'WARNING'}, f"Exporting despite health check failure: {props.health_last_summary}")
 
@@ -2724,11 +2904,11 @@ class PLINTHGEN_OT_export_stl(bpy.types.Operator):
 # UI Panel
 # -----------------------------
 class PLINTHGEN_PT_panel(bpy.types.Panel):
-    bl_label = "Plinth v3.3"
-    bl_idname = "PLINTHGEN_PT_panel_v3_3"
+    bl_label = "Plinth v3.4"
+    bl_idname = "PLINTHGEN_PT_panel_v3_4"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Plinth v3.3"
+    bl_category = "Plinth v3.4"
 
     def draw(self, context):
         layout = self.layout
@@ -2748,10 +2928,10 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
                     hb.label(text="Voxel remesh was applied.", icon="INFO")
 
         row = layout.row(align=True)
-        row.operator("plinthgen.create_v3_3", text="Create", icon="MESH_CUBE")
-        row.operator("plinthgen.rebuild_v3_3", text="Force Rebuild", icon="FILE_REFRESH")
+        row.operator("plinthgen.create_v3_4", text="Create", icon="MESH_CUBE")
+        row.operator("plinthgen.rebuild_v3_4", text="Force Rebuild", icon="FILE_REFRESH")
         row2 = layout.row(align=True)
-        row2.operator("plinthgen.export_stl_v3_3", text="Export STL", icon="EXPORT")
+        row2.operator("plinthgen.export_stl_v3_4", text="Export STL", icon="EXPORT")
 
         layout.separator()
         layout.prop(p, "shape")

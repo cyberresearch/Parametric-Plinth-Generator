@@ -1,7 +1,7 @@
-# Code Review: Parametric Plinth Generator v3.3
+# Code Review: Parametric Plinth Generator v3.4
 
 **Reviewed**: April 7, 2026
-**File**: `addon/plinth_generator_v3_3.py` (2,910 lines)
+**File**: `addon/plinth_generator_v3_4.py` (3,211 lines)
 **Target**: Blender 5.0.0
 **Goal**: Product readiness for commercial sale
 
@@ -148,7 +148,7 @@ Using a Blender property for a mutex-like lock means it's saved in the .blend fi
 
 ### 18. No Version Migration / Compatibility
 
-If a customer saves a .blend with v3.3 properties and later installs v3.4, there's no migration code to handle renamed/removed/added properties. This will cause `AttributeError` crashes on file load.
+If a customer saves a .blend with v3.4 properties and later installs v3.5, there's no migration code to handle renamed/removed/added properties. This will cause `AttributeError` crashes on file load.
 
 ### 19. Performance: High-Detail Decorations Create Massive Meshes
 
@@ -156,7 +156,7 @@ Rope bands, bead borders, and dentil courses each create individual geometry pri
 
 ### 20. `__pycache__` Committed to Git
 
-**File**: `addon/__pycache__/plinth_generator_v3_3.cpython-311.pyc`
+**File**: `addon/__pycache__/plinth_generator_v3_4.cpython-311.pyc`
 
 Compiled Python bytecode is in the repo. This should be in `.gitignore`.
 

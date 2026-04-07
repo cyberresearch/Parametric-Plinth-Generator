@@ -35,7 +35,7 @@ EPS = 1e-4
 
 def _default_addon_path() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.normpath(os.path.join(here, "..", "addon", "plinth_generator_v3_3.py"))
+    return os.path.normpath(os.path.join(here, "..", "addon", "plinth_generator_v3_4.py"))
 
 
 def _parse_cli_args(argv):
@@ -45,7 +45,7 @@ def _parse_cli_args(argv):
         argv = []
 
     parser = argparse.ArgumentParser(description="Run Parametric Plinth TEST_PLAN harness.")
-    parser.add_argument("--addon", default=_default_addon_path(), help="Path to addon/plinth_generator_v3_3.py")
+    parser.add_argument("--addon", default=_default_addon_path(), help="Path to addon/plinth_generator_v3_4.py")
     parser.add_argument("--case", action="append", default=[], help="Test ID to run (repeatable, e.g. --case T01)")
     parser.add_argument("--list", action="store_true", help="List supported case IDs and exit")
     parser.add_argument("--json-out", default="", help="Optional JSON report path")
@@ -81,6 +81,16 @@ class Harness:
         ("T24", "Inch input drives mm (CYL)"),
         ("T25", "mm input back-sync to inches"),
         ("T26", "Unit mode does not break manifold/health path"),
+        ("T27", "Sloped hollow roof thickness (BOX)"),
+        ("T28", "Sloped hollow roof thickness (CYL)"),
+        ("T29", "Export blocked after failed health"),
+        ("T30", "BOX recessed panels default health"),
+        ("T31", "BOX nameplate default health"),
+        ("T32", "BOX dentil default health"),
+        ("T33", "BOX dentil depth honored"),
+        ("T34", "BOX rope default health"),
+        ("T35", "CYL rope default health"),
+        ("T36", "CYL bead border default health"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -103,7 +113,7 @@ class Harness:
         if not os.path.exists(addon_path):
             raise FileNotFoundError(f"Addon file not found: {addon_path}")
 
-        module_name = "plinth_generator_v3_3_harness_target"
+        module_name = "plinth_generator_v3_4_harness_target"
         spec = importlib.util.spec_from_file_location(module_name, addon_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Unable to load addon module from {addon_path}")
@@ -267,21 +277,21 @@ class Harness:
 
     def _run_create_expect_finished(self, expect_runtime_error_fragment=None):
         return self._invoke_operator(
-            bpy.ops.plinthgen.create_v3_3,
+            bpy.ops.plinthgen.create_v3_4,
             expect_result="FINISHED",
             expect_runtime_error_fragment=expect_runtime_error_fragment,
         )
 
     def _run_create_expect_cancelled(self, expect_runtime_error_fragment=None):
         return self._invoke_operator(
-            bpy.ops.plinthgen.create_v3_3,
+            bpy.ops.plinthgen.create_v3_4,
             expect_result="CANCELLED",
             expect_runtime_error_fragment=expect_runtime_error_fragment,
         )
 
     def _run_rebuild_expect_finished(self, expect_runtime_error_fragment=None):
         return self._invoke_operator(
-            bpy.ops.plinthgen.rebuild_v3_3,
+            bpy.ops.plinthgen.rebuild_v3_4,
             expect_result="FINISHED",
             expect_runtime_error_fragment=expect_runtime_error_fragment,
         )
@@ -311,6 +321,9 @@ class Harness:
         coords = self._mesh_world_coords(obj)
         self._assert_true(bool(coords), f"Object '{obj.name}' has no vertices.")
         return max(c.z for c in coords)
+
+    def _side_top_thickness(self, outer_obj, inner_obj, axis: str, positive: bool):
+        return self._side_peak_z(outer_obj, axis, positive) - self._side_peak_z(inner_obj, axis, positive)
 
     def _mesh_xy_center(self, obj):
         coords = self._mesh_world_coords(obj)
@@ -578,7 +591,7 @@ class Harness:
         self._run_create_expect_finished()
         self._assert_true(not p.health_last_ran, "Health check should not run without preview duplicate.")
         # Exact-string match: must stay in sync with reset_health_report() call in
-        # the build_plinth else-branch of plinth_generator_v3_3.py.
+        # the build_plinth else-branch of plinth_generator_v3_4.py.
         self._assert_true(
             p.health_last_summary == "Health check requires Preview Cuts (Duplicate).",
             f"Unexpected health summary: {p.health_last_summary}",
@@ -689,6 +702,158 @@ class Harness:
         self._assert_no_preflight_errors()
         self._run_create_expect_finished()
         self._assert_true(p.health_last_ran, "Health report should run for inch-input manifold/health case.")
+
+    def case_t27(self):
+        p = self.props
+        p.shape = "BOX"
+        p.width_mm = 100.0
+        p.length_mm = 80.0
+        p.height_mm = 50.0
+        p.hollow_enabled = True
+        p.sealed_bottom = True
+        p.wall_thickness_mm = 5.0
+        p.top_thickness_mm = 10.0
+        p.bottom_thickness_mm = 3.0
+        p.slope_enabled = True
+        p.slope_delta_mm = 5.0
+        p.slope_axis = "X"
+        p.slope_high_side = "POS"
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        main = self._require_obj(self.module.OBJ_MAIN)
+        hollow = self._require_obj(self.module.OBJ_HOLLOW)
+        self._assert_close(self._side_top_thickness(main, hollow, "X", positive=True), 10.0, 0.05, "BOX roof thickness +X")
+        self._assert_close(self._side_top_thickness(main, hollow, "X", positive=False), 10.0, 0.05, "BOX roof thickness -X")
+
+    def case_t28(self):
+        p = self.props
+        p.shape = "CYL"
+        p.diameter_mm = 100.0
+        p.cyl_height_mm = 50.0
+        p.hollow_enabled = True
+        p.sealed_bottom = True
+        p.wall_thickness_mm = 5.0
+        p.top_thickness_mm = 10.0
+        p.bottom_thickness_mm = 3.0
+        p.slope_enabled = True
+        p.slope_delta_mm = 5.0
+        p.slope_axis = "X"
+        p.slope_high_side = "POS"
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        main = self._require_obj(self.module.OBJ_MAIN)
+        hollow = self._require_obj(self.module.OBJ_HOLLOW)
+        self._assert_close(self._side_top_thickness(main, hollow, "X", positive=True), 10.0, 0.05, "CYL roof thickness +X")
+        self._assert_close(self._side_top_thickness(main, hollow, "X", positive=False), 10.0, 0.05, "CYL roof thickness -X")
+
+    def case_t29(self):
+        p = self.props
+        p.shape = "BOX"
+        p.width_mm = 1.0
+        p.length_mm = 1.0
+        p.height_mm = 1.0
+        p.health_check_enabled = True
+        p.health_block_preview_on_fail = True
+        p.health_degenerate_area_mm2 = 1.1
+        p.preview_cuts_duplicate = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished(expect_runtime_error_fragment="Preview blocked by health check")
+        preview = self._require_obj(self.module.OBJ_PREVIEW)
+        self._assert_true(preview.hide_get(), "Preview should stay hidden after a blocked build.")
+        self._assert_true(not bpy.ops.plinthgen.export_stl_v3_4.poll(), "Export operator should be unavailable while preview is blocked.")
+        out_path = "/tmp/plinth_export_blocked_harness.stl"
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        result = self._invoke_operator(
+            lambda: bpy.ops.plinthgen.export_stl_v3_4(filepath=out_path),
+            expect_runtime_error_fragment="poll() failed",
+        )
+        self._assert_true(result["runtime_error"] is not None, "Expected export invocation to fail poll when preview is blocked.")
+        self._assert_true(not os.path.exists(out_path), "Blocked export should not write an STL file.")
+
+    def case_t30(self):
+        p = self.props
+        p.shape = "BOX"
+        p.panels_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected recessed panels build to pass health, got: {p.health_last_summary}")
+
+    def case_t31(self):
+        p = self.props
+        p.shape = "BOX"
+        p.nameplate_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected nameplate build to pass health, got: {p.health_last_summary}")
+
+    def case_t32(self):
+        p = self.props
+        p.shape = "BOX"
+        p.dentil_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected dentil build to pass health, got: {p.health_last_summary}")
+
+    def case_t33(self):
+        mesh = self.module.make_dentil_course_mesh(
+            shape="BOX",
+            width_mm=100.0,
+            length_mm=80.0,
+            diameter_mm=100.0,
+            height_mm=50.0,
+            dentil_w_mm=2.0,
+            dentil_d_mm=10.0,
+            dentil_h_mm=4.0,
+            dentil_spacing_mm=200.0,
+            at_top=True,
+            mesh_name="Harness_DentilDepthMesh",
+        )
+        try:
+            ys = [v.co.y for v in mesh.vertices]
+            self._assert_true(bool(ys), "Expected dentil mesh to contain vertices.")
+            self._assert_close(max(ys) - 40.0, 10.0, 0.2, "BOX dentil +Y depth")
+            self._assert_close((-40.0) - min(ys), 10.0, 0.2, "BOX dentil -Y depth")
+        finally:
+            bpy.data.meshes.remove(mesh)
+
+    def case_t34(self):
+        p = self.props
+        p.shape = "BOX"
+        p.rope_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected BOX rope build to pass health, got: {p.health_last_summary}")
+
+    def case_t35(self):
+        p = self.props
+        p.shape = "CYL"
+        p.rope_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected CYL rope build to pass health, got: {p.health_last_summary}")
+
+    def case_t36(self):
+        p = self.props
+        p.shape = "CYL"
+        p.beads_enabled = True
+        p.magnets_count = 0
+        p.drain_enabled = False
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(p.health_last_pass, f"Expected CYL bead build to pass health, got: {p.health_last_summary}")
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

@@ -3,7 +3,7 @@
 Blender addon for generating parametric plinth geometry for resin printing workflows.
 
 ## Current baseline
-- Source: `addon/plinth_generator_v3_3.py`
+- Source: `addon/plinth_generator_v3_4.py`
 - Blender target: 5.0
 
 ## Feature Highlights
@@ -29,21 +29,21 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 ## New Install (First Time)
 1. Open Blender.
 2. Go to `Edit > Preferences > Add-ons`.
-3. Click `Install...` and select `addon/plinth_generator_v3_3.py`.
+3. Click `Install...` and select `addon/plinth_generator_v3_4.py`.
 4. Enable the addon.
-5. Open the 3D View sidebar (`N`) and find the `Plinth v3.3` tab.
+5. Open the 3D View sidebar (`N`) and find the `Plinth v3.4` tab.
 
 ## Update Existing Install
 1. Save your current `.blend` file.
 2. In Blender, go to `Edit > Preferences > Add-ons`.
 3. Search for `Plinth` and disable the currently installed version.
 4. Click the down arrow on the addon entry and choose `Remove` (if shown).
-5. Click `Install...` and select the new `addon/plinth_generator_v3_3.py`.
+5. Click `Install...` and select the new `addon/plinth_generator_v3_4.py`.
 6. Re-enable the addon.
 7. Reopen your `.blend` file and run `Force Rebuild` once to refresh generated geometry.
 
 ## Quick Use
-1. Open the `Plinth v3.3` tab in the 3D View sidebar.
+1. Open the `Plinth v3.4` tab in the 3D View sidebar.
 2. Choose `Box / Rectangle` or `Cylinder`.
 3. Set `Input Units` before entering dimensions.
 4. Enable and tune the features you need: slope, hollowing, magnets, drains, trim, and decorations.
@@ -77,7 +77,7 @@ Blender addon for generating parametric plinth geometry for resin printing workf
 - When manifold remesh runs, the health report indicates that remesh was applied.
 
 ## Development And Validation
-- This addon does not have a separate packaging or compile step. Blender installs `addon/plinth_generator_v3_3.py` directly.
+- This addon does not have a separate packaging or compile step. Blender installs `addon/plinth_generator_v3_4.py` directly.
 - Manual coverage lives in `TEST_PLAN.md`.
 - Automated validation lives in `tests/test_plan_harness.py`.
 

@@ -67,10 +67,11 @@ def get_or_create_collection(name: str):
     return coll
 
 
-def delete_mesh_objects_only():
-    """Delete mesh objects only (keeps cameras/lights/empties)."""
-    for obj in list(bpy.context.scene.objects):
-        if obj.type == "MESH":
+def delete_plinthgen_objects_only():
+    """Delete only objects belonging to the PlinthGen collection (never touches user geometry)."""
+    coll = bpy.data.collections.get(COLL_NAME)
+    if coll:
+        for obj in list(coll.objects):
             bpy.data.objects.remove(obj, do_unlink=True)
 
 
@@ -169,13 +170,15 @@ def make_box_mesh(width_mm: float, length_mm: float, height_mm: float, mesh_name
     v6 = bm.verts.new(( w,  l, z1))
     v7 = bm.verts.new((-w,  l, z1))
 
-    bm.faces.new((v0, v1, v2, v3))
-    bm.faces.new((v4, v5, v6, v7))
-    bm.faces.new((v0, v1, v5, v4))
-    bm.faces.new((v1, v2, v6, v5))
-    bm.faces.new((v2, v3, v7, v6))
-    bm.faces.new((v3, v0, v4, v7))
+    # Face winding: all outward-facing normals (right-hand rule)
+    bm.faces.new((v3, v2, v1, v0))  # bottom (normal -Z)
+    bm.faces.new((v4, v5, v6, v7))  # top    (normal +Z)
+    bm.faces.new((v0, v1, v5, v4))  # front  (normal -Y)
+    bm.faces.new((v2, v3, v7, v6))  # back   (normal +Y)
+    bm.faces.new((v1, v2, v6, v5))  # right  (normal +X)
+    bm.faces.new((v3, v0, v4, v7))  # left   (normal -X)
 
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.normal_update()
     bm.to_mesh(mesh)
     bm.free()
@@ -620,6 +623,8 @@ def make_bead_border_mesh(
     rows = max(1, int(bead_rows))
     for row in range(rows):
         z = (height_mm - r - (row * bead_size_mm * 0.9)) if at_top else (r + (row * bead_size_mm * 0.9))
+        # Clamp z so beads never go below 0 or above height
+        z = max(r, min(height_mm - r, z))
         if shape == "BOX":
             per = 2.0 * (width_mm + length_mm)
             n = clamp_instance_count(max(4, int(per / spacing)), minimum=4)
@@ -838,7 +843,7 @@ def make_nameplate_cutter_mesh(
         else:
             bm_add_box(bm, pw, pd * 2.0, ph, (0.0, (length_mm * 0.5) - pd, zc))
     else:
-        rr = (diameter_mm * 0.5) - pd
+        rr = max(0.5, (diameter_mm * 0.5) - pd)
         bm_add_box(bm, pw, pd * 2.0, ph, (0.0, rr, zc))
     return bm_to_mesh(bm, mesh_name)
 
@@ -1198,20 +1203,44 @@ def add_helper_boolean_object(
     return obj
 
 
-def apply_all_modifiers(obj: bpy.types.Object):
+def apply_all_modifiers(obj: bpy.types.Object) -> list[str]:
+    """Apply all modifiers on *obj*. Returns list of modifier names that failed."""
     view_layer = bpy.context.view_layer
+    prev_active = view_layer.objects.active
+    prev_selected = [o for o in bpy.context.selected_objects]
+
     try:
         if bpy.context.object and bpy.context.object.mode != 'OBJECT' and bpy.ops.object.mode_set.poll():
             bpy.ops.object.mode_set(mode='OBJECT')
     except Exception:
         pass
+
     view_layer.objects.active = obj
     obj.select_set(True)
+    failed = []
     try:
         for m in list(obj.modifiers):
-            bpy.ops.object.modifier_apply(modifier=m.name)
+            try:
+                bpy.ops.object.modifier_apply(modifier=m.name)
+            except Exception as exc:
+                failed.append(m.name)
+                print(f"[PlinthGen] WARNING: modifier '{m.name}' failed to apply: {exc}")
+                # Remove the broken modifier so it doesn't block later operations
+                try:
+                    obj.modifiers.remove(m)
+                except Exception:
+                    pass
     finally:
         obj.select_set(False)
+        # Restore previous context
+        try:
+            view_layer.objects.active = prev_active
+            for o in prev_selected:
+                if o and o.name in bpy.data.objects:
+                    o.select_set(True)
+        except Exception:
+            pass
+    return failed
 
 
 # -----------------------------
@@ -1289,8 +1318,8 @@ def mesh_is_watertight(mesh: bpy.types.Mesh) -> bool:
     return ok
 
 
-def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float):
-    """Apply voxel remesh modifier (context op)."""
+def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float) -> bool:
+    """Apply voxel remesh modifier (context op). Returns True on success."""
     try:
         if bpy.context.object and bpy.context.object.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -1298,7 +1327,8 @@ def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float):
         pass
 
     view_layer = bpy.context.view_layer
-    bpy.ops.object.select_all(action='DESELECT')
+    prev_active = view_layer.objects.active
+    # Only deselect our target, not the whole scene
     obj.select_set(True)
     view_layer.objects.active = obj
 
@@ -1309,17 +1339,33 @@ def apply_voxel_remesh(obj: bpy.types.Object, voxel_size_mm: float):
     mod.use_remove_disconnected = False
     mod.adaptivity = 0.0
 
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    try:
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+    except Exception as exc:
+        print(f"[PlinthGen] WARNING: voxel remesh failed: {exc}")
+        # Remove broken modifier if still present
+        if obj.modifiers.get(mod.name):
+            obj.modifiers.remove(obj.modifiers.get(mod.name))
+        return False
+
+    # Validate the remesh produced geometry
+    if not obj.data or len(obj.data.vertices) == 0:
+        print("[PlinthGen] WARNING: voxel remesh produced empty mesh")
+        return False
+
+    return True
 
 
 def manifold_guarantee_on_preview(preview_obj: bpy.types.Object, voxel_size_mm: float) -> bool:
-    """Run cleanup and optional voxel remesh. Returns True if remesh was applied."""
+    """Run cleanup and optional voxel remesh. Returns True if remesh was successfully applied."""
     remeshed = False
     bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
     if not mesh_is_watertight(preview_obj.data):
-        apply_voxel_remesh(preview_obj, voxel_size_mm=voxel_size_mm)
-        remeshed = True
-        bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
+        if apply_voxel_remesh(preview_obj, voxel_size_mm=voxel_size_mm):
+            remeshed = True
+            bm_cleanup_and_normals(preview_obj.data, merge_dist_mm=MERGE_DIST_MM)
+        else:
+            print("[PlinthGen] WARNING: manifold guarantee voxel remesh failed; mesh may not be watertight.")
     return remeshed
 
 
@@ -1461,24 +1507,29 @@ def store_health_report(props: "PlinthGenProps", report, remesh_used: bool):
 # -----------------------------
 # Unit sync helpers
 # -----------------------------
+_unit_sync_lock = False  # module-level lock; avoids polluting undo stack / .blend file
+
+
 def _sync_in_from_mm(props, mm_attr: str, in_attr: str):
-    if getattr(props, "unit_sync_lock", False):
+    global _unit_sync_lock
+    if _unit_sync_lock:
         return
     try:
-        props.unit_sync_lock = True
+        _unit_sync_lock = True
         setattr(props, in_attr, max(0.0, getattr(props, mm_attr) / MM_PER_INCH))
     finally:
-        props.unit_sync_lock = False
+        _unit_sync_lock = False
 
 
 def _sync_mm_from_in(props, mm_attr: str, in_attr: str):
-    if getattr(props, "unit_sync_lock", False):
+    global _unit_sync_lock
+    if _unit_sync_lock:
         return
     try:
-        props.unit_sync_lock = True
+        _unit_sync_lock = True
         setattr(props, mm_attr, max(0.0, getattr(props, in_attr) * MM_PER_INCH))
     finally:
-        props.unit_sync_lock = False
+        _unit_sync_lock = False
 
 
 def _on_width_mm_update(self, context):
@@ -1535,8 +1586,6 @@ def _on_unit_input_update(self, context):
 # Properties
 # -----------------------------
 class PlinthGenProps(bpy.types.PropertyGroup):
-    unit_sync_lock: bpy.props.BoolProperty(default=False, options={"HIDDEN"})
-
     unit_input: bpy.props.EnumProperty(
         name="Input Units",
         items=[("MM", "Millimeters", ""), ("IN", "Inches", "")],
@@ -1785,8 +1834,8 @@ class PlinthGenProps(bpy.types.PropertyGroup):
     )
     health_block_preview_on_fail: bpy.props.BoolProperty(
         name="Block Preview On Fail",
-        default=False,
-        description="Hide preview/export mesh when health check fails.",
+        default=True,
+        description="Hide preview/export mesh when health check fails. Recommended for 3D printing.",
     )
     health_degenerate_area_mm2: bpy.props.FloatProperty(
         name="Degenerate Face Threshold (mm^2)",
@@ -2180,24 +2229,30 @@ def build_plinth(context, props: PlinthGenProps):
             min_sep = (drain_radius + (props.magnet_dia_mm + props.dia_tol_mm) * 0.5) + max(0.0, props.overlap_safety_mm)
             drain_pts = filter_points_by_min_distance(drain_pts, magnet_pts, min_sep)
 
-            # If all drains are filtered out, place one at center as fallback.
+            # If all drains were filtered out, try center; if that also overlaps, skip drains entirely.
             if not drain_pts:
-                drain_pts = [(0.0, 0.0)]
+                center_candidate = [(0.0, 0.0)]
+                center_candidate = filter_points_by_min_distance(center_candidate, magnet_pts, min_sep)
+                if center_candidate:
+                    drain_pts = center_candidate
+                else:
+                    print("[PlinthGen] WARNING: all drain positions overlap with magnets; drains skipped.")
 
-        drains_mesh = build_vertical_cylinder_cutters_mesh(
-            radius_mm=drain_radius,
-            depth_mm=drain_depth,
-            positions_xy=drain_pts,
-            mesh_name="Plinth_DrainCuttersMesh_v3_3",
-            segments=48,
-            overshoot_mm=drain_overshoot
-        )
-        drains_obj = bpy.data.objects.new(OBJ_DRAINS, drains_mesh)
-        coll.objects.link(drains_obj)
-        drains_obj.hide_set(not props.show_cutters)
-        drains_obj.hide_render = True
-        add_boolean_modifier(main_obj, drains_obj, "DrainCut")
-        post_remesh_functional_cutters.append(drains_obj)
+        if drain_pts:
+            drains_mesh = build_vertical_cylinder_cutters_mesh(
+                radius_mm=drain_radius,
+                depth_mm=drain_depth,
+                positions_xy=drain_pts,
+                mesh_name="Plinth_DrainCuttersMesh_v3_3",
+                segments=48,
+                overshoot_mm=drain_overshoot
+            )
+            drains_obj = bpy.data.objects.new(OBJ_DRAINS, drains_mesh)
+            coll.objects.link(drains_obj)
+            drains_obj.hide_set(not props.show_cutters)
+            drains_obj.hide_render = True
+            add_boolean_modifier(main_obj, drains_obj, "DrainCut")
+            post_remesh_functional_cutters.append(drains_obj)
 
     # DRAINS AT MAGNET CENTERS (sealed hollow bottoms)
     if (
@@ -2489,7 +2544,9 @@ def build_plinth(context, props: PlinthGenProps):
         preview.name = OBJ_PREVIEW
         coll.objects.link(preview)
 
-        apply_all_modifiers(preview)
+        modifier_failures = apply_all_modifiers(preview)
+        if modifier_failures:
+            print(f"[PlinthGen] WARNING: {len(modifier_failures)} modifier(s) failed on preview: {modifier_failures}")
         ground_mesh_to_z0(preview.data)
 
         if props.texture_enabled and props.texture_strength_mm > 0.0:
@@ -2513,7 +2570,9 @@ def build_plinth(context, props: PlinthGenProps):
                 # Restore crisp functional holes after voxel remesh.
                 for idx, cutter_obj in enumerate(post_remesh_functional_cutters):
                     add_boolean_modifier(preview, cutter_obj, f"PostRemeshFunctionalCut_{idx + 1}")
-                apply_all_modifiers(preview)
+                post_failures = apply_all_modifiers(preview)
+                if post_failures:
+                    print(f"[PlinthGen] WARNING: post-remesh modifier(s) failed: {post_failures}")
                 bm_cleanup_and_normals(preview.data, merge_dist_mm=MERGE_DIST_MM)
                 ground_mesh_to_z0(preview.data)
 
@@ -2555,39 +2614,109 @@ def build_plinth(context, props: PlinthGenProps):
 # -----------------------------
 # Operators
 # -----------------------------
+def _execute_build(op: bpy.types.Operator, context) -> set:
+    """Shared implementation for Create and Rebuild operators."""
+    props = getattr(context.scene, PROP_NAME)
+    errors, warnings = preflight_validate(props)
+    if not preflight_report_to_operator(op, errors, warnings):
+        return {"CANCELLED"}
+    delete_plinthgen_objects_only()
+    ensure_units_mm()
+    preview_blocked, block_message = build_plinth(context, props)
+    if preview_blocked:
+        op.report({'ERROR'}, block_message)
+    return {"FINISHED"}
+
+
 class PLINTHGEN_OT_create(bpy.types.Operator):
     bl_idname = "plinthgen.create_v3_3"
     bl_label = "Create Plinth v3.3"
+    bl_description = "Generate a new parametric plinth from current settings (removes previous plinth)"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and context.mode == 'OBJECT'
+
     def execute(self, context):
-        props = getattr(context.scene, PROP_NAME)
-        errors, warnings = preflight_validate(props)
-        if not preflight_report_to_operator(self, errors, warnings):
-            return {"CANCELLED"}
-        delete_mesh_objects_only()
-        ensure_units_mm()
-        preview_blocked, block_message = build_plinth(context, props)
-        if preview_blocked:
-            self.report({'ERROR'}, block_message)
-        return {"FINISHED"}
+        return _execute_build(self, context)
 
 
 class PLINTHGEN_OT_rebuild(bpy.types.Operator):
     bl_idname = "plinthgen.rebuild_v3_3"
     bl_label = "Force Rebuild"
+    bl_description = "Rebuild the plinth from scratch using current settings"
     bl_options = {"REGISTER", "UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and context.mode == 'OBJECT'
+
     def execute(self, context):
-        props = getattr(context.scene, PROP_NAME)
-        errors, warnings = preflight_validate(props)
-        if not preflight_report_to_operator(self, errors, warnings):
+        return _execute_build(self, context)
+
+
+class PLINTHGEN_OT_export_stl(bpy.types.Operator):
+    bl_idname = "plinthgen.export_stl_v3_3"
+    bl_label = "Export Plinth STL"
+    bl_description = "Export the preview mesh as an STL file for 3D printing"
+    bl_options = {"REGISTER"}
+
+    filepath: bpy.props.StringProperty(subtype='FILE_PATH', default="plinth.stl")
+    filter_glob: bpy.props.StringProperty(default="*.stl", options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.objects.get(OBJ_PREVIEW) is not None
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        import os
+
+        preview = bpy.data.objects.get(OBJ_PREVIEW)
+        if not preview:
+            self.report({'ERROR'}, "No preview mesh found. Run Create/Rebuild first.")
             return {"CANCELLED"}
-        delete_mesh_objects_only()
-        ensure_units_mm()
-        preview_blocked, block_message = build_plinth(context, props)
-        if preview_blocked:
-            self.report({'ERROR'}, block_message)
+
+        # Warn if health check failed
+        props = getattr(context.scene, PROP_NAME)
+        if props.health_last_ran and not props.health_last_pass:
+            self.report({'WARNING'}, f"Exporting despite health check failure: {props.health_last_summary}")
+
+        # Ensure only the preview is selected for export
+        bpy.ops.object.select_all(action='DESELECT')
+        preview.select_set(True)
+        context.view_layer.objects.active = preview
+
+        filepath = self.filepath
+        if not filepath.lower().endswith(".stl"):
+            filepath += ".stl"
+
+        try:
+            bpy.ops.wm.stl_export(
+                filepath=filepath,
+                export_selected_objects=True,
+                global_scale=1.0,
+                ascii_format=False,
+            )
+            self.report({'INFO'}, f"Exported: {os.path.basename(filepath)}")
+        except Exception as exc:
+            # Fallback for older Blender versions that use the legacy exporter
+            try:
+                bpy.ops.export_mesh.stl(
+                    filepath=filepath,
+                    use_selection=True,
+                    global_scale=1.0,
+                    ascii=False,
+                )
+                self.report({'INFO'}, f"Exported: {os.path.basename(filepath)}")
+            except Exception as exc2:
+                self.report({'ERROR'}, f"STL export failed: {exc2}")
+                return {"CANCELLED"}
+
         return {"FINISHED"}
 
 
@@ -2606,9 +2735,23 @@ class PLINTHGEN_PT_panel(bpy.types.Panel):
         p = getattr(context.scene, PROP_NAME)
         errors, warnings = preflight_validate(p)
 
+        # Health status banner (prominent, at top)
+        if p.health_last_ran:
+            if p.health_last_pass:
+                hb = layout.row()
+                hb.label(text="Mesh Health: PASS", icon="CHECKMARK")
+            else:
+                hb = layout.box()
+                hb.alert = True
+                hb.label(text=f"Mesh Health: {p.health_last_summary}", icon="ERROR")
+                if p.health_last_remesh_used:
+                    hb.label(text="Voxel remesh was applied.", icon="INFO")
+
         row = layout.row(align=True)
         row.operator("plinthgen.create_v3_3", text="Create", icon="MESH_CUBE")
         row.operator("plinthgen.rebuild_v3_3", text="Force Rebuild", icon="FILE_REFRESH")
+        row2 = layout.row(align=True)
+        row2.operator("plinthgen.export_stl_v3_3", text="Export STL", icon="EXPORT")
 
         layout.separator()
         layout.prop(p, "shape")
@@ -2889,6 +3032,7 @@ classes = (
     PlinthGenProps,
     PLINTHGEN_OT_create,
     PLINTHGEN_OT_rebuild,
+    PLINTHGEN_OT_export_stl,
     PLINTHGEN_PT_panel,
 )
 

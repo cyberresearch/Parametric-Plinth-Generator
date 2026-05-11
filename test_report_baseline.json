@@ -1,0 +1,243 @@
+{
+  "addon": "/Users/justinsharp/Dev/Parametric Plinth Generator/addon/plinth_generator_v3_4.py",
+  "total": 39,
+  "passed": 39,
+  "failed": 0,
+  "errors": 0,
+  "results": [
+    {
+      "id": "T01",
+      "title": "BOX smoke test",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T02",
+      "title": "CYL smoke test",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T03",
+      "title": "Slope direction",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T04",
+      "title": "Hollow open bottom",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T05",
+      "title": "Sealed magnet clamp warning",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T06",
+      "title": "Sealed margin disables magnets",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T07",
+      "title": "Center drains in magnets",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T08",
+      "title": "Center drains without sealed bottom",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T09",
+      "title": "Center drains without magnets",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T10",
+      "title": "Center drain size warning",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T11",
+      "title": "BOX base trim",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T12",
+      "title": "CYL base trim",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T13",
+      "title": "CYL trim clamp warning",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T14",
+      "title": "Error: wall too thick",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T15",
+      "title": "Error: top too thick",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T16",
+      "title": "Error: bottom too thick",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T17",
+      "title": "Error: drain too large",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T18",
+      "title": "Cancel protects scene meshes",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T19",
+      "title": "Health requires preview duplicate",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T20",
+      "title": "Forced health fail + block preview",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T21",
+      "title": "Manifold + health integration",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T22",
+      "title": "Unit input toggle (BOX)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T23",
+      "title": "Inch input drives mm (BOX)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T24",
+      "title": "Inch input drives mm (CYL)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T25",
+      "title": "mm input back-sync to inches",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T26",
+      "title": "Unit mode does not break manifold/health path",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T27",
+      "title": "Sloped hollow roof thickness (BOX)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T28",
+      "title": "Sloped hollow roof thickness (CYL)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T29",
+      "title": "Export blocked after failed health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T30",
+      "title": "BOX recessed panels default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T31",
+      "title": "BOX nameplate default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T32",
+      "title": "BOX dentil default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T33",
+      "title": "BOX dentil depth honored",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T34",
+      "title": "BOX rope default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T35",
+      "title": "CYL rope default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T36",
+      "title": "CYL bead border default health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "R01",
+      "title": "Single BOX perimeter magnet centers",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "R02",
+      "title": "Single BOX corner-layout magnet centers",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "R03",
+      "title": "Single CYL magnet centers",
+      "status": "PASS",
+      "detail": ""
+    }
+  ]
+}

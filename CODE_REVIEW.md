@@ -11,6 +11,8 @@
 
 ### 1. Modifier Apply Can Fail Silently — Corrupted Exports
 
+**RESOLVED**: `65ab6ba` added per-modifier try/except in apply_all_modifiers. `6ccf6e4` + `ee29dac` made the callers escalate failures to operator ERROR + clean cancel. Verified by T37.
+
 **Lines 1201-1214 (`apply_all_modifiers`)**
 
 The function uses `bpy.ops.object.modifier_apply()` in a loop, but if any single modifier fails (e.g., boolean solver error on complex geometry), the exception is not caught per-modifier. The `try/finally` only ensures `select_set(False)` runs — it does NOT detect or report failed modifiers.
@@ -21,6 +23,8 @@ The function uses `bpy.ops.object.modifier_apply()` in a loop, but if any single
 
 ### 2. Default Settings Let Bad Geometry Through
 
+**RESOLVED**: `65ab6ba` flipped `health_block_preview_on_fail` default to True and moved the health status banner to the top of the panel above Create/Rebuild. Verified by existing T20, T29.
+
 **Line 1786: `health_block_preview_on_fail` defaults to `False`**
 
 The health check runs and may report FAIL, but the preview mesh is still visible and exportable. Most customers won't notice a small "Status: FAIL" label buried at the bottom of a long panel. They'll export and print non-watertight geometry.
@@ -29,9 +33,13 @@ The health check runs and may report FAIL, but the preview mesh is still visible
 
 ### 3. No Export Operator
 
+**RESOLVED**: `65ab6ba` added PLINTHGEN_OT_export_stl with health-fail poll gating, file dialog, and new/legacy STL exporter fallback. Verified by existing T29 (blocked path) and T39 (happy path, added `d0f8841`).
+
 The addon generates geometry but provides no export button. Customers must navigate `File > Export > STL` themselves. Every competing paid Blender addon for 3D printing includes a one-click export. This is a major UX gap for a commercial product.
 
 ### 4. `delete_mesh_objects_only()` Deletes ALL Mesh Objects in Scene
+
+**RESOLVED**: `65ab6ba` introduced delete_plinthgen_objects_only(), which scopes deletion to the PlinthGen_v3_4 collection — user meshes outside that collection are untouched. Verified by existing T18 (cancel path) and T38 (success path, added `dac5a85`).
 
 **Lines 70-74, called at lines 2568 and 2588**
 
@@ -51,6 +59,8 @@ Both `Create` and `Force Rebuild` call this function, which **removes every mesh
 ## Medium Issues (Should Fix)
 
 ### 5. `apply_all_modifiers` Context Fragility
+
+**RESOLVED**: `65ab6ba` made apply_all_modifiers save and restore prev_active + prev_selected, and poll-checks bpy.ops.object.mode_set before invoking it.
 
 **Lines 1201-1214**
 
@@ -78,6 +88,8 @@ When all drain positions are filtered out due to magnet overlap, the fallback is
 
 ### 9. `PLINTHGEN_OT_create` and `PLINTHGEN_OT_rebuild` Are Identical
 
+**RESOLVED**: `b3ef2d3` differentiates them via poll(): Create is gated to "no plinth exists", Force Rebuild is gated to "plinth exists". Tooltips updated. Verified by T40.
+
 **Lines 2558-2591**
 
 Both operators have the exact same `execute()` body. This is confusing for users ("what's the difference?") and adds maintenance burden. If they're meant to be identical, one should call the other or they should be merged.
@@ -96,6 +108,8 @@ The preflight validator is called every time the panel redraws (mouse hover, pro
 
 ### 11. No Operator `poll()` Methods
 
+**RESOLVED**: `65ab6ba` added poll() classmethods to all PLINTHGEN_OT_* operators; `b3ef2d3` further tightened them per CR-#9.
+
 **Lines 2558-2591**
 
 Neither operator defines a `poll()` classmethod. Best practice is to check that the context is valid (e.g., correct mode, scene exists) before allowing the button to be clicked. Without this, the operator can be invoked in invalid contexts (e.g., from a script while in Edit Mode).
@@ -111,6 +125,8 @@ The bottom face is wound `(v0, v1, v2, v3)` and the top face `(v4, v5, v6, v7)`.
 ## Lower Priority (Nice to Fix)
 
 ### 13. No `bl_description` on Operators
+
+**RESOLVED**: `65ab6ba` added bl_description to all operators; `b3ef2d3` refined Create/Rebuild tooltips to explain the new gating relationship.
 
 Users who hover over buttons see no tooltip explaining what "Create" vs "Force Rebuild" does.
 
@@ -148,6 +164,8 @@ Using a Blender property for a mutex-like lock means it's saved in the .blend fi
 
 ### 18. No Version Migration / Compatibility
 
+**NOT APPLICABLE for v1.0**: the addon has no `@persistent` or `bpy.app.handlers` registrations, so there is nothing to harden defensively. Real version migration is explicitly out of scope per HANDOFF.md.
+
 If a customer saves a .blend with v3.4 properties and later installs v3.5, there's no migration code to handle renamed/removed/added properties. This will cause `AttributeError` crashes on file load.
 
 ### 19. Performance: High-Detail Decorations Create Massive Meshes
@@ -155,6 +173,8 @@ If a customer saves a .blend with v3.4 properties and later installs v3.5, there
 Rope bands, bead borders, and dentil courses each create individual geometry primitives (cylinders, spheres) per instance. A plinth with beads + rope + dentils could easily generate 10,000+ individual primitives merged into a single bmesh, then boolean-unioned. This can take minutes on modest hardware with no progress indicator.
 
 ### 20. `__pycache__` Committed to Git
+
+**RESOLVED**: `.gitignore` excludes __pycache__/ and *.py[cod]. `git ls-files | grep pyc` returns no tracked files.
 
 **File**: `addon/__pycache__/plinth_generator_v3_4.cpython-311.pyc`
 

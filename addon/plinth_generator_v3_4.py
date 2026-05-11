@@ -2715,6 +2715,7 @@ def build_plinth(context, props: PlinthGenProps):
         failures = apply_all_modifiers(preview)
         if failures:
             modifier_failures.extend(failures)
+            return preview_blocked, preview_block_message, modifier_failures
         ground_mesh_to_z0(preview.data)
 
         if props.texture_enabled and props.texture_strength_mm > 0.0:
@@ -2745,6 +2746,7 @@ def build_plinth(context, props: PlinthGenProps):
                 post_failures = apply_all_modifiers(preview)
                 if post_failures:
                     modifier_failures.extend(post_failures)
+                    return preview_blocked, preview_block_message, modifier_failures
                 bm_cleanup_and_normals(preview.data, merge_dist_mm=MERGE_DIST_MM)
                 ground_mesh_to_z0(preview.data)
 

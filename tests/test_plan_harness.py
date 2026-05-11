@@ -92,6 +92,7 @@ class Harness:
         ("T35", "CYL rope default health"),
         ("T36", "CYL bead border default health"),
         ("T37", "Modifier failure escalates to operator ERROR"),
+        ("T38", "Successful Create preserves non-plinth scene meshes"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -893,6 +894,25 @@ class Harness:
             self._obj(self.module.OBJ_PREVIEW) is None,
             "Preview must be cleaned up after a modifier-apply failure.",
         )
+
+    def case_t38(self):
+        """CR-#4: a successful Create must not delete non-plinth scene meshes."""
+        sentinel_name = "Harness_SuccessSentinel"
+        cube_mesh = self.module.make_box_mesh(
+            10.0, 10.0, 10.0, "Harness_SuccessSentinelMesh"
+        )
+        cube_obj = bpy.data.objects.new(sentinel_name, cube_mesh)
+        bpy.context.scene.collection.objects.link(cube_obj)
+
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+
+        self._assert_true(
+            bpy.data.objects.get(sentinel_name) is not None,
+            "Sentinel cube must survive a successful Create.",
+        )
+        # Sanity: a plinth was actually built (otherwise the test proves nothing).
+        self._require_obj(self.module.OBJ_PREVIEW)
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

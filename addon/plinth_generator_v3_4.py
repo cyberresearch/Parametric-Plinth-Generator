@@ -2813,12 +2813,17 @@ def _execute_build(op: bpy.types.Operator, context) -> set:
 class PLINTHGEN_OT_create(bpy.types.Operator):
     bl_idname = "plinthgen.create_v3_4"
     bl_label = "Create Plinth v3.4"
-    bl_description = "Generate a new parametric plinth from current settings (removes previous plinth)"
+    bl_description = (
+        "Build a new plinth from current settings. "
+        "Disabled while a plinth already exists — use Force Rebuild to update it."
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return context.scene is not None and context.mode == 'OBJECT'
+        if context.scene is None or context.mode != 'OBJECT':
+            return False
+        return bpy.data.objects.get(OBJ_MAIN) is None
 
     def execute(self, context):
         return _execute_build(self, context)
@@ -2827,12 +2832,17 @@ class PLINTHGEN_OT_create(bpy.types.Operator):
 class PLINTHGEN_OT_rebuild(bpy.types.Operator):
     bl_idname = "plinthgen.rebuild_v3_4"
     bl_label = "Force Rebuild"
-    bl_description = "Rebuild the plinth from scratch using current settings"
+    bl_description = (
+        "Rebuild the existing plinth from current settings. "
+        "Disabled when no plinth exists — use Create to make one first."
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return context.scene is not None and context.mode == 'OBJECT'
+        if context.scene is None or context.mode != 'OBJECT':
+            return False
+        return bpy.data.objects.get(OBJ_MAIN) is not None
 
     def execute(self, context):
         return _execute_build(self, context)

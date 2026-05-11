@@ -1,7 +1,7 @@
 {
   "addon": "/Users/justinsharp/Dev/Parametric Plinth Generator/addon/plinth_generator_v3_4.py",
-  "total": 42,
-  "passed": 42,
+  "total": 43,
+  "passed": 43,
   "failed": 0,
   "errors": 0,
   "results": [
@@ -236,6 +236,12 @@
     {
       "id": "T39",
       "title": "STL export writes a valid file on passing health",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T40",
+      "title": "Create vs Force Rebuild poll differentiation",
       "status": "PASS",
       "detail": ""
     },

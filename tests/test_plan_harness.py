@@ -94,6 +94,7 @@ class Harness:
         ("T37", "Modifier failure escalates to operator ERROR"),
         ("T38", "Successful Create preserves non-plinth scene meshes"),
         ("T39", "STL export writes a valid file on passing health"),
+        ("T40", "Create vs Force Rebuild poll differentiation"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -952,6 +953,35 @@ class Harness:
         finally:
             if os.path.exists(out_path):
                 os.remove(out_path)
+
+    def case_t40(self):
+        """CR-#9: Create is disabled while a plinth exists; Force Rebuild
+        is disabled when none exists."""
+        # Fresh state: no plinth.
+        self._assert_true(
+            bpy.ops.plinthgen.create_v3_4.poll(),
+            "Create should be available when no plinth exists.",
+        )
+        self._assert_true(
+            not bpy.ops.plinthgen.rebuild_v3_4.poll(),
+            "Force Rebuild should be disabled when no plinth exists.",
+        )
+
+        self._run_create_expect_finished()
+
+        # After Create succeeds, polarity flips.
+        self._assert_true(
+            not bpy.ops.plinthgen.create_v3_4.poll(),
+            "Create should be disabled while a plinth exists.",
+        )
+        self._assert_true(
+            bpy.ops.plinthgen.rebuild_v3_4.poll(),
+            "Force Rebuild should be available once a plinth exists.",
+        )
+
+        # Force Rebuild should succeed and leave a plinth in place.
+        self._run_rebuild_expect_finished()
+        self._require_obj(self.module.OBJ_MAIN)
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

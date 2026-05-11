@@ -91,6 +91,7 @@ class Harness:
         ("T34", "BOX rope default health"),
         ("T35", "CYL rope default health"),
         ("T36", "CYL bead border default health"),
+        ("T37", "Modifier failure escalates to operator ERROR"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -854,6 +855,44 @@ class Harness:
         self._assert_no_preflight_errors()
         self._run_create_expect_finished()
         self._assert_true(p.health_last_pass, f"Expected CYL bead build to pass health, got: {p.health_last_summary}")
+
+    def case_t37(self):
+        """CR-#1: when apply_all_modifiers reports failures, the operator
+        must report ERROR, return CANCELLED, and clean up partial plinth objects."""
+        p = self.props
+        p.preview_cuts_duplicate = True
+        p.health_check_enabled = False  # health needs a valid mesh; skip
+        p.hollow_enabled = True          # guarantees at least one modifier exists
+        p.manifold_guarantee = False     # keep the path short
+
+        original = self.module.apply_all_modifiers
+
+        def fake_apply_all_modifiers(obj):
+            # Mirror the real cleanup: drop modifiers so the test isn't left
+            # with a half-modified preview, but report a fake failure.
+            for m in list(obj.modifiers):
+                try:
+                    obj.modifiers.remove(m)
+                except Exception:
+                    pass
+            return ["FakeFailedModifier"]
+
+        try:
+            self.module.apply_all_modifiers = fake_apply_all_modifiers
+            self._run_create_expect_cancelled(
+                expect_runtime_error_fragment="Modifier apply failed",
+            )
+        finally:
+            self.module.apply_all_modifiers = original
+
+        self._assert_true(
+            self._obj(self.module.OBJ_MAIN) is None,
+            "Main plinth must be cleaned up after a modifier-apply failure.",
+        )
+        self._assert_true(
+            self._obj(self.module.OBJ_PREVIEW) is None,
+            "Preview must be cleaned up after a modifier-apply failure.",
+        )
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

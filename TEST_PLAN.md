@@ -54,6 +54,7 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 | T34 | BOX rope default health | `shape=BOX`, `rope_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. | PASS |  |
 | T35 | CYL rope default health | `shape=CYL`, `rope_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. | PASS |  |
 | T36 | CYL bead border default health | `shape=CYL`, `beads_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. | PASS |  |
+| T37 | Modifier failure escalates | Force `apply_all_modifiers` to return a failure via a harness-level monkey-patch; click `Create` | Operator reports `Modifier apply failed: ...`, returns `CANCELLED`, and no plinth objects remain in the scene. | PASS |  |
 
 ## Signoff
 

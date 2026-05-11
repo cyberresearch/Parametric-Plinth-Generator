@@ -2266,6 +2266,7 @@ def build_plinth(context, props: PlinthGenProps):
     reset_health_report(props, summary="Health check has not run yet.")
     preview_blocked = False
     preview_block_message = ""
+    modifier_failures: list[str] = []
 
     coll = get_or_create_collection(COLL_NAME)
 
@@ -2711,9 +2712,9 @@ def build_plinth(context, props: PlinthGenProps):
         preview.name = OBJ_PREVIEW
         coll.objects.link(preview)
 
-        modifier_failures = apply_all_modifiers(preview)
-        if modifier_failures:
-            print(f"[PlinthGen] WARNING: {len(modifier_failures)} modifier(s) failed on preview: {modifier_failures}")
+        failures = apply_all_modifiers(preview)
+        if failures:
+            modifier_failures.extend(failures)
         ground_mesh_to_z0(preview.data)
 
         if props.texture_enabled and props.texture_strength_mm > 0.0:
@@ -2743,7 +2744,7 @@ def build_plinth(context, props: PlinthGenProps):
                     add_boolean_modifier(preview, cutter_obj, f"PostRemeshFunctionalCut_{idx + 1}")
                 post_failures = apply_all_modifiers(preview)
                 if post_failures:
-                    print(f"[PlinthGen] WARNING: post-remesh modifier(s) failed: {post_failures}")
+                    modifier_failures.extend(post_failures)
                 bm_cleanup_and_normals(preview.data, merge_dist_mm=MERGE_DIST_MM)
                 ground_mesh_to_z0(preview.data)
 
@@ -2779,7 +2780,7 @@ def build_plinth(context, props: PlinthGenProps):
         main_obj.select_set(True)
 
     purge_orphans()
-    return preview_blocked, preview_block_message
+    return preview_blocked, preview_block_message, modifier_failures
 
 
 # -----------------------------
@@ -2793,7 +2794,15 @@ def _execute_build(op: bpy.types.Operator, context) -> set:
         return {"CANCELLED"}
     delete_plinthgen_objects_only()
     ensure_units_mm()
-    preview_blocked, block_message = build_plinth(context, props)
+    preview_blocked, block_message, modifier_failures = build_plinth(context, props)
+    if modifier_failures:
+        delete_plinthgen_objects_only()
+        op.report(
+            {'ERROR'},
+            f"Modifier apply failed for: {', '.join(modifier_failures)}. "
+            "Build aborted; exported geometry would be incomplete.",
+        )
+        return {"CANCELLED"}
     if preview_blocked:
         op.report({'ERROR'}, block_message)
     return {"FINISHED"}

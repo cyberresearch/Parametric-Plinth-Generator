@@ -93,6 +93,7 @@ class Harness:
         ("T36", "CYL bead border default health"),
         ("T37", "Modifier failure escalates to operator ERROR"),
         ("T38", "Successful Create preserves non-plinth scene meshes"),
+        ("T39", "STL export writes a valid file on passing health"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -913,6 +914,44 @@ class Harness:
         )
         # Sanity: a plinth was actually built (otherwise the test proves nothing).
         self._require_obj(self.module.OBJ_PREVIEW)
+
+    def case_t39(self):
+        """CR-#3: STL export writes a non-empty file when health passes."""
+        import tempfile
+
+        p = self.props
+        p.preview_cuts_duplicate = True
+        p.health_check_enabled = True
+
+        self._assert_no_preflight_errors()
+        self._run_create_expect_finished()
+        self._assert_true(
+            p.health_last_pass,
+            f"Default plinth should pass health; got: {p.health_last_summary}",
+        )
+        self._assert_true(
+            bpy.ops.plinthgen.export_stl_v3_4.poll(),
+            "Export operator should be available when health passes.",
+        )
+
+        out_path = os.path.join(tempfile.gettempdir(), "plinth_export_harness_t39.stl")
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        try:
+            self._invoke_operator(
+                lambda: bpy.ops.plinthgen.export_stl_v3_4(filepath=out_path),
+                expect_result="FINISHED",
+            )
+            self._assert_true(os.path.exists(out_path), "Export must write the STL file.")
+            # Binary STL = 80-byte header + 4-byte triangle count + 50 bytes/triangle.
+            # Any non-trivial plinth has >>1 triangle, so well above 84 bytes.
+            self._assert_true(
+                os.path.getsize(out_path) >= 84,
+                f"Exported STL is suspiciously small: {os.path.getsize(out_path)} bytes",
+            )
+        finally:
+            if os.path.exists(out_path):
+                os.remove(out_path)
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

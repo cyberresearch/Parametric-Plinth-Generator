@@ -1,7 +1,7 @@
 {
   "addon": "/Users/justinsharp/Dev/Parametric Plinth Generator/addon/plinth_generator_v3_4.py",
-  "total": 41,
-  "passed": 41,
+  "total": 42,
+  "passed": 42,
   "failed": 0,
   "errors": 0,
   "results": [
@@ -230,6 +230,12 @@
     {
       "id": "T38",
       "title": "Successful Create preserves non-plinth scene meshes",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T39",
+      "title": "STL export writes a valid file on passing health",
       "status": "PASS",
       "detail": ""
     },

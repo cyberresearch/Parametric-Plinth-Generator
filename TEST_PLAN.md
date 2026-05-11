@@ -56,6 +56,7 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 | T36 | CYL bead border default health | `shape=CYL`, `beads_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. | PASS |  |
 | T37 | Modifier failure escalates | Force `apply_all_modifiers` to return a failure via a harness-level monkey-patch; click `Create` | Operator reports `Modifier apply failed: ...`, returns `CANCELLED`, and no plinth objects remain in the scene. | PASS |  |
 | T38 | Successful Create preserves user meshes | Add a plain Blender cube called `Harness_SuccessSentinel` to the scene, click `Create` with default settings | Build completes; the sentinel cube is still present after Create finishes. | PASS |  |
+| T39 | STL export happy path | Default `Create` with health enabled, then click `Export STL` with a tempfile path | Export operator is enabled, returns `FINISHED`, and writes a non-empty binary STL file (>= 84 bytes). | PASS |  |
 
 ## Signoff
 

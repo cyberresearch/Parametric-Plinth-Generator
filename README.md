@@ -11,7 +11,7 @@ Drive a panel of parameters and generate a watertight plinth mesh, ready to prin
 - **Shape**: box or cylinder
 - **Slope**: angle the top surface in any direction
 - **Hollow shell**: sealed or open bottom, configurable wall, top, and floor thickness
-- **Magnet pockets**: precise cylindrical cuts for embedding rare-earth magnets (perimeter, corners, ring, or single centered)
+- **Magnet holes**: precise cylindrical cuts for embedding rare-earth magnets (box: perimeter or corners; cylinder: ring). A single magnet is centered automatically.
 - **Drain / vent holes**: prevent resin pooling on hollow prints, including optional drains at magnet centers
 - **Decorative trim**: half-round base trim plus 12 profile families — ogee/cove/convex bands, stepped layers, vertical fluting, recessed side panels, bead borders, rope twist, dentil courses, scalloped skirts, corner bosses/medallions, nameplate recess, surface texture stamp, foot pads / bun feet
 - **Preflight validator**: checks parameters before build and flags hard errors and warnings

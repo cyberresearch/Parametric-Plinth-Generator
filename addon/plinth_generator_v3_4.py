@@ -1,10 +1,12 @@
 bl_info = {
-    "name": "Parametric Plinth Generator v3.4",
-    "author": "cyberresearch",
-    "version": (3, 4, 0),
-    "blender": (5, 0, 0),
+    "name": "Parametric Plinth Generator",
+    "author": "Justin Sharp",
+    "version": (3, 4, 1),
+    "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Plinth v3.4",
-    "description": "Parametric plinth with slope, hollow (sealed/open), decorative half-round base trim, magnets, drains, and optional watertight remesh fallback.",
+    "description": "Parametric plinth generator for tabletop miniature display and resin 3D printing. Slope, hollow shell, magnet holes, drain vents, decorative trim, and one-click STL export with mesh health check.",
+    "doc_url": "https://github.com/cyberresearch/Parametric-Plinth-Generator",
+    "tracker_url": "https://github.com/cyberresearch/Parametric-Plinth-Generator/issues",
     "category": "Add Mesh",
 }
 

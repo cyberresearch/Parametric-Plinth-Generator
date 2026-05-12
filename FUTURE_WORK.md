@@ -52,3 +52,30 @@ the .blend. Replace with a module-level Python flag.
 ### CR-#19 — High-detail decorations create massive meshes
 Performance ceiling on rope/bead/dentil combinations. Add a progress indicator
 and/or a "decoration density" property that caps total primitive count.
+
+## Found during the v1.0 ship-readiness review (2026-05-12)
+
+### CR-#21 — Create/Rebuild poll: unlinked-orphan `OBJ_MAIN`
+Both operator polls use `bpy.data.objects.get(OBJ_MAIN)`, which finds the
+datablock regardless of scene linkage. If a user manually unlinks
+`Plinth_Main_v3_4` from its collection (e.g., via the outliner) without
+deleting the orphan datablock, the state becomes:
+
+- Create poll → False (datablock still exists)
+- Rebuild poll → True, runs `_execute_build`, `delete_plinthgen_objects_only()`
+  only iterates collection members and leaves the orphan, then
+  `bpy.data.objects.new(OBJ_MAIN, ...)` auto-renames the new object to
+  `Plinth_Main_v3_4.001`.
+
+Result: Force Rebuild silently produces a misnamed plinth. Contrived (requires
+the user to intentionally unlink) and recoverable (delete the orphan, click
+again), but confusing.
+
+Cheap fix: scope the poll check to the PlinthGen collection, e.g.
+
+```python
+coll = bpy.data.collections.get(COLL_NAME)
+return coll is not None and OBJ_MAIN in {o.name for o in coll.objects}
+```
+
+…or add a stale-orphan sweep at the top of `_execute_build`.

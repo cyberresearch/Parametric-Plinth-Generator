@@ -1,7 +1,7 @@
 {
   "addon": "/Users/justinsharp/Dev/Parametric Plinth Generator/addon/plinth_generator_v3_4.py",
-  "total": 43,
-  "passed": 43,
+  "total": 44,
+  "passed": 44,
   "failed": 0,
   "errors": 0,
   "results": [
@@ -242,6 +242,12 @@
     {
       "id": "T40",
       "title": "Create vs Force Rebuild poll differentiation",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T41",
+      "title": "apply_all_modifiers catches real modifier_apply failure",
       "status": "PASS",
       "detail": ""
     },

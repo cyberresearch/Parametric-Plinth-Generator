@@ -95,6 +95,7 @@ class Harness:
         ("T38", "Successful Create preserves non-plinth scene meshes"),
         ("T39", "STL export writes a valid file on passing health"),
         ("T40", "Create vs Force Rebuild poll differentiation"),
+        ("T41", "apply_all_modifiers catches real modifier_apply failure"),
         ("R01", "Single BOX perimeter magnet centers"),
         ("R02", "Single BOX corner-layout magnet centers"),
         ("R03", "Single CYL magnet centers"),
@@ -944,11 +945,30 @@ class Harness:
                 expect_result="FINISHED",
             )
             self._assert_true(os.path.exists(out_path), "Export must write the STL file.")
-            # Binary STL = 80-byte header + 4-byte triangle count + 50 bytes/triangle.
-            # Any non-trivial plinth has >>1 triangle, so well above 84 bytes.
+            # Binary STL = 80-byte header + 4-byte uint32 LE triangle count
+            # + 50 bytes per triangle (12B normal + 36B vertices + 2B attribute).
+            # Parse the header so we catch zero-triangle or truncated exports, not
+            # just header-only files. The previous >= 84 check passed even for a
+            # valid-looking empty STL.
+            import struct
+            with open(out_path, "rb") as fh:
+                stl_bytes = fh.read()
             self._assert_true(
-                os.path.getsize(out_path) >= 84,
-                f"Exported STL is suspiciously small: {os.path.getsize(out_path)} bytes",
+                len(stl_bytes) >= 84,
+                f"Exported STL shorter than minimum header: {len(stl_bytes)} bytes",
+            )
+            tri_count = struct.unpack("<I", stl_bytes[80:84])[0]
+            self._assert_true(
+                tri_count >= 12,
+                f"STL declares only {tri_count} triangles; even a bare box has 12.",
+            )
+            expected_size = 80 + 4 + 50 * tri_count
+            self._assert_true(
+                len(stl_bytes) == expected_size,
+                (
+                    f"STL size {len(stl_bytes)} does not match declared triangle "
+                    f"count {tri_count} (expected {expected_size} bytes)."
+                ),
             )
         finally:
             if os.path.exists(out_path):
@@ -982,6 +1002,45 @@ class Harness:
         # Force Rebuild should succeed and leave a plinth in place.
         self._run_rebuild_expect_finished()
         self._require_obj(self.module.OBJ_MAIN)
+
+    def case_t41(self):
+        """CR-#1 (direct): apply_all_modifiers must catch a real RuntimeError
+        from bpy.ops.object.modifier_apply, record the failed modifier, and
+        strip the broken modifier from the object so later ops aren't blocked.
+
+        A BOOLEAN modifier with no target object raises RuntimeError ("Modifier
+        is disabled, skipping apply") in Blender 5.0.1 -- this exercises the
+        real production try/except block in apply_all_modifiers, which T37
+        bypasses via a whole-function monkey-patch.
+        """
+        # Build a small standalone test cube (not a plinth) so isolation is
+        # clean and reset_state's mesh-wipe handles cleanup automatically.
+        test_mesh = self.module.make_box_mesh(
+            10.0, 10.0, 10.0, "Harness_T41_BrokenBoolMesh"
+        )
+        test_obj = bpy.data.objects.new("Harness_T41_BrokenBool", test_mesh)
+        bpy.context.scene.collection.objects.link(test_obj)
+
+        try:
+            mod = test_obj.modifiers.new("HarnessBrokenBool", type="BOOLEAN")
+            mod.operation = "DIFFERENCE"
+            mod.object = None  # No target -> apply raises RuntimeError.
+            broken_name = mod.name
+
+            failed = self.module.apply_all_modifiers(test_obj)
+
+            self._assert_true(
+                broken_name in failed,
+                f"apply_all_modifiers should report '{broken_name}' as failed; got: {failed}",
+            )
+            remaining = [m.name for m in test_obj.modifiers]
+            self._assert_true(
+                broken_name not in remaining,
+                f"Broken modifier should have been removed from stack; remaining: {remaining}",
+            )
+        finally:
+            if test_obj.name in bpy.data.objects:
+                bpy.data.objects.remove(test_obj, do_unlink=True)
 
     def _assert_single_magnet_centered(self):
         cutters_obj = self._require_obj(self.module.OBJ_CUTTERS)

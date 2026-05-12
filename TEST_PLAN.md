@@ -56,8 +56,9 @@ This plan targets broad coverage of geometry generation, preflight validation, m
 | T36 | CYL bead border default health | `shape=CYL`, `beads_enabled=ON`, `magnets_count=0`, `drain_enabled=OFF`, build | Build succeeds and post-build health reports `PASS`. | PASS |  |
 | T37 | Modifier failure escalates | Force `apply_all_modifiers` to return a failure via a harness-level monkey-patch; click `Create` | Operator reports `Modifier apply failed: ...`, returns `CANCELLED`, and no plinth objects remain in the scene. | PASS |  |
 | T38 | Successful Create preserves user meshes | Add a plain Blender cube called `Harness_SuccessSentinel` to the scene, click `Create` with default settings | Build completes; the sentinel cube is still present after Create finishes. | PASS |  |
-| T39 | STL export happy path | Default `Create` with health enabled, then click `Export STL` with a tempfile path | Export operator is enabled, returns `FINISHED`, and writes a non-empty binary STL file (>= 84 bytes). | PASS |  |
+| T39 | STL export happy path | Default `Create` with health enabled, then click `Export STL` with a tempfile path | Export operator is enabled, returns `FINISHED`, and writes a valid binary STL: parsed triangle count is >= 12 and file size equals `80 + 4 + 50 * triangle_count` exactly (catches truncation and zero-triangle exports). | PASS |  |
 | T40 | Create / Force Rebuild button gating | In a clean scene, check button poll; click `Create`; recheck button poll; click `Force Rebuild` | Before Create: Create enabled, Force Rebuild disabled. After Create: Create disabled, Force Rebuild enabled. Force Rebuild succeeds. | PASS |  |
+| T41 | apply_all_modifiers catches real modifier failure | Build a standalone cube, add a BOOLEAN modifier with `object=None` (Blender raises `RuntimeError: Modifier is disabled, skipping apply` on apply), call `apply_all_modifiers` directly | The function returns the broken modifier's name in the failure list and removes the modifier from the object's stack. | PASS |  |
 
 ## Signoff
 

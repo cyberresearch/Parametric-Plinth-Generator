@@ -1,112 +1,63 @@
 # Parametric Plinth Generator
 
-Blender addon for generating parametric plinth geometry for resin printing workflows.
+Build display plinths for tabletop miniatures and resin 3D printing — parametric, customizable, and 3D-print-ready.
 
-## Current baseline
-- Source: `addon/plinth_generator_v3_4.py`
-- Blender target: 5.0
+![Screenshot placeholder — add a panel screenshot or demo GIF before listing]
 
-## Feature Highlights
-- `BOX` and `CYL` plinth generation
-- Dimension input units: `MM` or `IN` (inch entry always converts to mm for model generation)
-- Top-only slope controls
-- Hollow interior (open or sealed bottom)
-- Magnet pockets (box perimeter/corners, cylinder ring)
-- Single-magnet mode centers the pocket on the plinth
-- Standard drain/vent holes plus optional drains at magnet centers (sealed hollow mode)
-- Decorative half-round base trim
-- Expanded decorative profile suite (bands, steps, fluting, panels, beads, rope, dentils, scallops, bosses, nameplate recess, texture stamp, feet)
-- Optional manifold guarantee on preview (voxel remesh only when needed)
-- Preflight validator before build/rebuild
-- Post-build health check with optional preview block on fail
+## What it does
 
-## Units Behavior
-- Set `Dimensions > Input Units` to `Millimeters` or `Inches`.
-- In inch mode, dimension fields accept inches and display live converted mm values directly below each field.
-- Core geometry is always generated from mm properties internally (`1 in = 25.4 mm`).
-- Non-dimension controls (for example wall thickness, drain diameter, trim radius) remain mm-based.
+Drive a panel of parameters and generate a watertight plinth mesh, ready to print:
 
-## New Install (First Time)
-1. Open Blender.
-2. Go to `Edit > Preferences > Add-ons`.
-3. Click `Install...` and select `addon/plinth_generator_v3_4.py`.
-4. Enable the addon.
-5. Open the 3D View sidebar (`N`) and find the `Plinth v3.4` tab.
+- **Shape**: box or cylinder
+- **Slope**: angle the top surface in any direction
+- **Hollow shell**: sealed or open bottom, configurable wall, top, and floor thickness
+- **Magnet pockets**: precise cylindrical cuts for embedding rare-earth magnets (perimeter, corners, ring, or single centered)
+- **Drain / vent holes**: prevent resin pooling on hollow prints, including optional drains at magnet centers
+- **Decorative trim**: half-round base trim plus 12 profile families — ogee/cove/convex bands, stepped layers, vertical fluting, recessed side panels, bead borders, rope twist, dentil courses, scalloped skirts, corner bosses/medallions, nameplate recess, surface texture stamp, foot pads / bun feet
+- **Preflight validator**: checks parameters before build and flags hard errors and warnings
+- **Mesh health check**: post-build watertightness, loose-geometry, degenerate-face, island-count, and inverted-normal validation
+- **Manifold guarantee**: optional voxel remesh, applied only when the preview isn't watertight
+- **One-click STL export**: ready for your slicer
 
-## Update Existing Install
-1. Save your current `.blend` file.
-2. In Blender, go to `Edit > Preferences > Add-ons`.
-3. Search for `Plinth` and disable the currently installed version.
-4. Click the down arrow on the addon entry and choose `Remove` (if shown).
-5. Click `Install...` and select the new `addon/plinth_generator_v3_4.py`.
-6. Re-enable the addon.
-7. Reopen your `.blend` file and run `Force Rebuild` once to refresh generated geometry.
+## Installation
 
-## Quick Use
-1. Open the `Plinth v3.4` tab in the 3D View sidebar.
-2. Choose `Box / Rectangle` or `Cylinder`.
-3. Set `Input Units` before entering dimensions.
-4. Enable and tune the features you need: slope, hollowing, magnets, drains, trim, and decorations.
-5. Review the `Preflight` box and fix any hard errors before building.
-6. Click `Create` for a fresh build in the current scene.
-7. Use `Force Rebuild` after changing options on an existing plinth setup.
+1. Download `plinth_generator_v3.4.1.zip` from your Gumroad or Blender Market purchase.
+2. Open Blender (version 4.2 LTS or later).
+3. `Edit > Preferences > Add-ons > Install...`, select the zip file.
+4. Enable the **Parametric Plinth Generator** entry.
+5. The panel appears at `View3D > Sidebar (N key) > Plinth v3.4`.
 
-## Build Behavior
-- `Create` builds a new plinth using the current panel settings.
-- `Force Rebuild` reruns the build with the current settings and is the safer choice after updating the addon or changing many parameters.
-- Successful `Create` and `Force Rebuild` remove existing mesh objects in the scene before generating the plinth.
-- Preflight hard errors cancel the operation before mesh deletion.
-- When `Preview Cuts (Duplicate)` is enabled, the preview mesh is the export-ready object and the driver object is hidden.
+## Quick start
 
-## Recommended Robust Workflow
-1. Set `Input Units` first, then enter dimensions and feature options (`Hollow`, `Magnets`, `Drain / Vent Holes`, `Base Trim`, decorations).
-2. Review the `Preflight` box and resolve any errors before building.
-3. Keep `Preview Cuts (Duplicate)` enabled for export-ready mesh output.
-4. Keep `Manifold Guarantee (Preview)` enabled for automatic watertight remediation.
-5. Keep `Post-Build Health Check` enabled and review its status after each build.
-6. Optionally enable `Block Preview On Fail` to prevent exporting failed preview geometry.
+1. Open the panel.
+2. Click **Create**. A default box plinth is built.
+3. Tweak parameters in the panel — shape, dimensions, slope, decorations, magnets, drains.
+4. Click **Force Rebuild** to update the plinth in place.
+5. When you're happy with the result, click **Export STL** and save to your slicer's import folder.
 
-## Post-Build Health Check Notes
-- Runs on the final preview mesh after boolean operations and manifold processing.
-- Reports:
-  - Watertight/non-manifold edge status
-  - Loose edges/verts
-  - Degenerate faces
-  - Face island count
-  - Inverted normals flag
-- When manifold remesh runs, the health report indicates that remesh was applied.
+## Inputs and units
 
-## Development And Validation
-- This addon does not have a separate packaging or compile step. Blender installs `addon/plinth_generator_v3_4.py` directly.
-- Manual coverage lives in `TEST_PLAN.md`.
-- Automated validation lives in `tests/test_plan_harness.py`.
+By default the addon works in millimeters. To enter dimensions in inches, switch the **Input Units** dropdown to `IN`; values are converted to mm automatically and the converted value is shown under each field. Non-dimension controls (wall thickness, drain diameter, trim radius, etc.) remain mm-based.
 
-Run the full headless harness from the repo root:
+## Mesh health check
 
-```bash
-blender --background --factory-startup --python tests/test_plan_harness.py
-```
+After every build, the addon validates the preview mesh for watertight geometry, loose edges/verts, degenerate faces, face-island count, and inverted normals. If any check fails, the failure is reported in the panel banner.
 
-If `blender` is not on `PATH` on macOS, use:
+To prevent exporting a failed mesh, leave **Block Preview On Fail** enabled in the **Post-Build Health Check** box. With that option on, the preview is hidden when the health check fails so you can't accidentally export a corrupted model.
 
-```bash
-/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python tests/test_plan_harness.py
-```
+## Compatibility
 
-Run selected cases:
+- **Blender**: 4.2 LTS through latest stable (currently 5.0). Tested on Blender 5.0.1.
+- **Operating systems**: macOS and Windows are officially supported. Linux should work (pure-Python addon) but is untested.
 
-```bash
-blender --background --factory-startup --python tests/test_plan_harness.py -- --case T14 --case T18
-```
+## License
 
-List supported test IDs:
+GPLv3. See `LICENSE` for the full text. You may use, modify, and redistribute the addon; redistributions must remain GPL and include source.
 
-```bash
-blender --background --factory-startup --python tests/test_plan_harness.py -- --list
-```
+## Changelog
 
-Write a JSON report:
+See `CHANGELOG.md` for the full version history.
 
-```bash
-blender --background --factory-startup --python tests/test_plan_harness.py -- --json-out /tmp/plinth_test_report.json
-```
+## Bugs and support
+
+File issues at https://github.com/cyberresearch/Parametric-Plinth-Generator/issues
